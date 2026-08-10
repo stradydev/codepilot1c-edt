@@ -57,7 +57,7 @@ public class GrepTool extends AbstractTool {
                     },
                     "file_pattern": {
                         "type": "string",
-                        "description": "Optional file-name glob such as '*.bsl' or '*.xml'."
+                        "description": "Optional file-name glob such as '*.bsl' or '*.form'. Comma-separated lists ('*.bsl,*.mdo') and path-shaped globs ('**/*.form', matched on the last segment) are accepted. WITHOUT it the search covers *.bsl, *.os, *.mdo, *.form, *.dcs, *.rights, *.xml, *.java — any other extension (*.md, *.json, *.txt) is invisible until you pass it here."
                     },
                     "regex": {
                         "type": "boolean",
@@ -143,7 +143,7 @@ public class GrepTool extends AbstractTool {
                 List<SearchMatch> matches = new ArrayList<>();
                 searchInContainer(searchRoot, searchPattern, filePattern, contextLines, matchKind, matches);
 
-                return formatResults(patternStr, matches, outputMode, useRegex);
+                return formatResults(patternStr, matches, outputMode, useRegex, filePattern);
             } catch (CoreException e) {
                 return ToolResult.failure("Error searching: " + e.getMessage()); //$NON-NLS-1$
             }
@@ -223,16 +223,7 @@ public class GrepTool extends AbstractTool {
     }
 
     private boolean matchesFilePattern(String name, String pattern) {
-        if (pattern == null || pattern.isEmpty()) {
-            // Default to common code files
-            return name.endsWith(".bsl") || name.endsWith(".os") ||  //$NON-NLS-1$ //$NON-NLS-2$
-                   name.endsWith(".java") || name.endsWith(".xml"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        String regex = pattern
-                .replace(".", "\\.") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("*", ".*") //$NON-NLS-1$ //$NON-NLS-2$
-                .replace("?", "."); //$NON-NLS-1$ //$NON-NLS-2$
-        return name.matches(regex);
+        return GrepFileFilter.matches(name, pattern);
     }
 
     private void searchInFile(IFile file, Pattern pattern, int contextLines,
@@ -305,7 +296,8 @@ public class GrepTool extends AbstractTool {
         return StandardCharsets.UTF_8;
     }
 
-    private ToolResult formatResults(String pattern, List<SearchMatch> matches, String outputMode, boolean useRegex) {
+    private ToolResult formatResults(String pattern, List<SearchMatch> matches, String outputMode,
+                                     boolean useRegex, String filePattern) {
         StringBuilder sb = new StringBuilder();
         if ("compact".equals(outputMode)) { //$NON-NLS-1$
             for (SearchMatch match : matches) {
@@ -317,6 +309,7 @@ public class GrepTool extends AbstractTool {
             }
             if (matches.isEmpty()) {
                 sb.append("(no matches for `").append(pattern).append("`)\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                appendCorpusHint(sb, filePattern);
                 appendLiteralRegexHint(sb, pattern, useRegex);
             } else if (matches.size() == MAX_RESULTS) {
                 sb.append("...truncated at ").append(MAX_RESULTS).append(" matches\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -341,10 +334,29 @@ public class GrepTool extends AbstractTool {
         }
 
         if (matches.isEmpty()) {
+            appendCorpusHint(sb, filePattern);
             appendLiteralRegexHint(sb, pattern, useRegex);
         }
 
         return ToolResult.success(sb.toString(), ToolResult.ToolResultType.SEARCH_RESULTS);
+    }
+
+    /**
+     * On a zero-match search, states which corpus was actually read. A bare "0 matches" reads as
+     * "the text is not there", but the search only ever opens files the corpus admits — a
+     * {@code .form} item name or a {@code .md} note stays invisible while the answer looks
+     * confident. Reported live: {@code GroupResponsibleTreasury} sat in a {@code Form.form} and
+     * returned a clean zero (codepilot1c-feedback 2026-08-08).
+     */
+    private void appendCorpusHint(StringBuilder sb, String filePattern) {
+        if (filePattern == null || filePattern.isBlank()) {
+            sb.append("\nNote: with no file_pattern the search read only ") //$NON-NLS-1$
+                    .append(GrepFileFilter.describeDefaultCorpus())
+                    .append(". Any other extension was never opened — pass file_pattern to widen.\n"); //$NON-NLS-1$
+        } else {
+            sb.append("\nNote: only files matching `").append(filePattern) //$NON-NLS-1$
+                    .append("` were read; everything else was skipped.\n"); //$NON-NLS-1$
+        }
     }
 
     /**
