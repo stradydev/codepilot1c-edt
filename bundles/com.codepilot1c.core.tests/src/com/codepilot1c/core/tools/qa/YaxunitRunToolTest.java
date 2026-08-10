@@ -154,15 +154,26 @@ public class YaxunitRunToolTest {
     }
 
     @Test
-    public void classify_zeroTestsWithFilterAndStaleInfobaseBlamesTheInfobase() {
+    public void classify_zeroTestsWithFilterNamesTheFilterEvenWhenTheStateIsNotEqual() {
+        // Q90: a non-EQUAL state does not prove the tests are missing from the infobase. An exclusive
+        // apply that answered schema_applied:true with no dynamic_only leaves EDT's comparison on
+        // NOT_EQUAL with live code — so "infobase_stale" was a guess presented as the cause, and it sent
+        // callers into an update loop that cannot converge. What was actually observed is that a filter
+        // was passed and selected nothing; the stale hypothesis stays in the message.
         for (String state : new String[] {"NOT_EQUAL", "LOADING"}) { //$NON-NLS-1$ //$NON-NLS-2$
             YaxunitRunTool.Verdict verdict = YaxunitRunTool.classify(report(0, 0, 0),
                     finished(Integer.valueOf(0)), true, state);
 
             assertEquals("no_tests_matched", verdict.status()); //$NON-NLS-1$
-            assertEquals("infobase_stale", verdict.reason()); //$NON-NLS-1$
-            assertFalse(verdict.ok());
-            assertTrue(verdict.message().contains("update_infobase")); //$NON-NLS-1$
+            assertEquals("filter_matched_nothing", verdict.reason()); //$NON-NLS-1$
+            assertFalse("zero executed tests carries no verdict -> error channel", verdict.ok()); //$NON-NLS-1$
+            assertTrue("the state must still be reported", verdict.message().contains(state)); //$NON-NLS-1$
+            assertTrue("the stale hypothesis must survive as a hypothesis", //$NON-NLS-1$
+                    verdict.message().contains("update_infobase")); //$NON-NLS-1$
+            assertTrue("and the known non-convergence must be named so nobody loops on updates", //$NON-NLS-1$
+                    verdict.message().contains("schema_applied:true")); //$NON-NLS-1$
+            assertTrue("the filter hints must be handed over — that is the observed cause", //$NON-NLS-1$
+                    verdict.message().contains("registered in the module")); //$NON-NLS-1$
         }
     }
 

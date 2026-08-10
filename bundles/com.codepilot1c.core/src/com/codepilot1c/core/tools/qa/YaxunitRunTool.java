@@ -290,7 +290,10 @@ public class YaxunitRunTool extends AbstractTool {
                 result.addProperty("equality_state", equalityState == null ? "unknown" : equalityState); //$NON-NLS-1$ //$NON-NLS-2$
                 if (isStaleState(equalityState)) {
                     String staleWarning = "PREFLIGHT WARNING: equality_state=" + equalityState + " — " //$NON-NLS-1$ //$NON-NLS-2$
-                            + STALE_HINT + " (otherwise the run executes stale code, or no tests at all)."; //$NON-NLS-1$
+                            + STALE_HINT + " (otherwise the run executes stale code, or no tests at all). " //$NON-NLS-1$
+                            + "Exception: if the last update_infobase answered schema_applied:true with no " //$NON-NLS-1$
+                            + "dynamic_only, this NOT_EQUAL is EDT's comparison failing to converge, not " //$NON-NLS-1$
+                            + "stale code — another update will not change it."; //$NON-NLS-1$
                     preflightWarnings.add(staleWarning);
                     LOG.warn("[%s] %s", opId, staleWarning); //$NON-NLS-1$
                 }
@@ -632,8 +635,22 @@ public class YaxunitRunTool extends AbstractTool {
                     + "or it is attached in safe mode. " + SAFE_MODE_REMEDIATION, false); //$NON-NLS-1$
         }
         if (isStaleState(state)) {
-            return new Verdict("no_tests_matched", "infobase_stale", //$NON-NLS-1$ //$NON-NLS-2$
-                    "YAxUnit executed 0 tests and equality_state=" + state + ": " + STALE_HINT + ".", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            // The reason names what was OBSERVED — a filter was passed and selected nothing — not the
+            // likelier-sounding guess. A non-EQUAL state does not prove the infobase lacks the tests:
+            // an exclusive apply that reported schema_applied:true with no dynamic_only leaves EDT's
+            // comparison on NOT_EQUAL as a known non-convergence, with live code in the infobase
+            // (see EdtUpdateInfobaseTool's own advisory). Blaming the infobase there sent callers into
+            // an update loop that cannot converge, and it broke the infra warm-up probe, which passes a
+            // deliberately nonexistent module name and reads reason=filter_matched_nothing as the proof
+            // that the thin client resolved and ran (Provision-Task.ps1 Step-YaxunitWarmup). The stale
+            // hypothesis stays in the message, in equality_state and in preflight_warnings.
+            return new Verdict("no_tests_matched", "filter_matched_nothing", //$NON-NLS-1$ //$NON-NLS-2$
+                    "YAxUnit executed 0 tests: the filter selected nothing. equality_state=" + state //$NON-NLS-1$
+                    + ", so if the filter names tests that should exist, the infobase may not carry them " //$NON-NLS-1$
+                    + "yet — " + STALE_HINT + ". But a NOT_EQUAL that a preceding update_infobase already " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "reported as applied (schema_applied:true, no dynamic_only) is a known " //$NON-NLS-1$
+                    + "non-convergence of EDT's comparison, NOT stale code — do not loop on updates. " //$NON-NLS-1$
+                    + "Otherwise: " + FILTER_HINT + ".", false); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if ("EQUAL".equals(state)) { //$NON-NLS-1$
             return new Verdict("no_tests_matched", "filter_matched_nothing", //$NON-NLS-1$ //$NON-NLS-2$
