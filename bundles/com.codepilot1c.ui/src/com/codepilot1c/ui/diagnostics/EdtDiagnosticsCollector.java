@@ -850,14 +850,20 @@ public class EdtDiagnosticsCollector {
                     })
                     .filter(marker -> markerMatchesContext(marker, context))
                     .peek(marker -> counters[1]++)
+                    // The severity gate runs BEFORE the scan budget, not inside forEach: a marker
+                    // the caller filtered out must not consume one of the preLimit slots, otherwise
+                    // severity=error on a warning-heavy module returns fewer errors than exist.
+                    .filter(marker -> {
+                        if (fromRuntimeSeverity(marker.getSeverity()).getLevel()
+                                < query.minSeverity().getLevel()) {
+                            counters[2]++;
+                            return false;
+                        }
+                        return true;
+                    })
                     .limit(preLimit)
                     .forEach(marker -> {
                         Severity sev = fromRuntimeSeverity(marker.getSeverity());
-                        if (sev.getLevel() < query.minSeverity().getLevel()) {
-                            counters[2]++;
-                            return;
-                        }
-
                         String message = safeString(marker.getMessage());
                         if (message.isBlank()) {
                             counters[3]++;

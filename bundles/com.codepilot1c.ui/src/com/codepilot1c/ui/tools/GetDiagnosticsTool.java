@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import com.codepilot1c.core.diagnostics.DiagnosticOrigin;
+import com.codepilot1c.core.diagnostics.DiagnosticSeverityFilter;
 import com.codepilot1c.core.logging.VibeLogger;
 import com.codepilot1c.core.tools.ITool;
 import com.codepilot1c.core.tools.ToolResult;
@@ -204,13 +205,24 @@ public class GetDiagnosticsTool implements ITool {
         });
     }
 
+    /**
+     * Maps the {@code severity} parameter onto the collector's gate. The rule itself lives in
+     * {@link DiagnosticSeverityFilter} (core, unit-tested) because this bundle has no test runtime.
+     *
+     * <p>History: {@code "error"} used to have no branch of its own and fell through to
+     * {@code default -> Severity.INFO} (regression in 6fa4cf7), so {@code severity=error} returned
+     * byte-for-byte the same answer as {@code severity=info} — warnings and all. Callers read that
+     * as "scope=file leaked project-wide results".</p>
+     */
     private Severity parseSeverity(String str) {
-        if (str == null) return Severity.INFO;
-        return switch (str.toLowerCase()) {
-            case "warning", "warn" -> Severity.WARNING; //$NON-NLS-1$ //$NON-NLS-2$
-            case "info", "all" -> Severity.INFO; //$NON-NLS-1$ //$NON-NLS-2$
-            default -> Severity.INFO;
-        };
+        int level = DiagnosticSeverityFilter.minLevel(str);
+        if (level == DiagnosticSeverityFilter.LEVEL_ERROR) {
+            return Severity.ERROR;
+        }
+        if (level == DiagnosticSeverityFilter.LEVEL_WARNING) {
+            return Severity.WARNING;
+        }
+        return Severity.INFO;
     }
 
     private int getIntParam(Map<String, Object> params, String key, int defaultValue) {
