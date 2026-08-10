@@ -1,5 +1,6 @@
 package com.codepilot1c.core.tools.metadata;
 import com.codepilot1c.core.tools.CompositeCommandKeyGuard;
+import com.codepilot1c.core.tools.JsonObjectPayload;
 import com.codepilot1c.core.tools.SchemaKeyGuard;
 import com.codepilot1c.core.tools.ToolResult;
 import com.codepilot1c.core.tools.ToolParameters;
@@ -43,8 +44,8 @@ public class EdtValidateRequestTool extends AbstractTool {
                   "description": "Имя mutating tool; для composite tools external_manage, extension_manage и dcs_manage передай точный payload.command"
                 },
                 "payload": {
-                  "type": "object",
-                  "description": "Те же аргументы, которые потом будут переданы в мутационный tool без validation_token; для composite tools должен включать command. Top-level keys are checked against the target tool's own schema and an unknown one is REFUSED (not dropped): put per-object values such as 'type' / 'length' inside the nested 'properties' object, not at the top level."
+                  "type": ["object", "string"],
+                  "description": "Те же аргументы, которые потом будут переданы в мутационный tool без validation_token; для composite tools должен включать command. A JSON string that parses to an object is accepted too. Top-level keys are checked against the target tool's own schema and an unknown one is REFUSED (not dropped): put per-object values such as 'type' / 'length' inside the nested 'properties' object, not at the top level."
                 }
               },
               "required": ["project", "operation", "payload"],
@@ -83,9 +84,14 @@ public class EdtValidateRequestTool extends AbstractTool {
             try {
                 String project = stringParam(parameters, "project"); //$NON-NLS-1$
                 String requestedOperation = normalizeOperationName(stringParam(parameters, "operation")); //$NON-NLS-1$
-                Object payloadObject = parameters.get("payload"); //$NON-NLS-1$
+                Object payloadObject = coercePayload(parameters.get("payload")); //$NON-NLS-1$
                 if (!(payloadObject instanceof Map<?, ?> payloadMap)) {
-                    return ToolResult.failure(errorJson("KNOWLEDGE_REQUIRED", "payload must be an object", false)); //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.failure(errorJson("KNOWLEDGE_REQUIRED", //$NON-NLS-1$
+                            "payload must be an object, or a JSON string that parses to one — got " //$NON-NLS-1$
+                            + (payloadObject == null ? "nothing" //$NON-NLS-1$
+                                    : payloadObject.getClass().getSimpleName()
+                                            + " that is not a JSON object"), //$NON-NLS-1$
+                            false));
                 }
                 ValidationOperation operation = ValidationOperation.resolve(requestedOperation, (Map<String, Object>) payloadMap);
 
@@ -219,6 +225,20 @@ public class EdtValidateRequestTool extends AbstractTool {
         String message = EndpointOperationGate.refusalMessageOrNull(
                 operation, requestedOperation, endpointVisible);
         return message == null ? null : ToolResult.failure(errorJson("TOOL_NOT_EXPOSED", message, false)); //$NON-NLS-1$
+    }
+
+    /**
+     * Accepts a {@code payload} that arrived serialized. Most MCP payloads are a JSON string somewhere
+     * along the way, so answering a bare "payload must be an object" spent a round-trip on something
+     * the tool could simply read. A string that is not a JSON object is returned untouched, so the
+     * caller still gets the type complaint rather than a silent empty payload.
+     */
+    private Object coercePayload(Object payload) {
+        if (!(payload instanceof String text)) {
+            return payload;
+        }
+        Map<String, Object> parsed = JsonObjectPayload.parse(text);
+        return parsed != null ? parsed : payload;
     }
 
     private String stringParam(Map<String, Object> params, String key) {

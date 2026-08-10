@@ -101,6 +101,27 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-25 (2026-08-10) — `edt_validate_request` accepts a payload that arrived serialized
+
+* **`payload must be an object` spent a round-trip on something the tool could just read.** Most MCP
+  payloads are a JSON string somewhere along the way, so a serialized `payload` is ordinary rather than
+  wrong. A string that parses to an object is now parsed; one that does not still gets the type
+  complaint, and the complaint now names both accepted forms instead of stating only the object one.
+* **The schema declares `["object", "string"]`.** Accepting a string server-side would otherwise be
+  inert: MCP clients drop or reject an argument that does not match its declared type — the same
+  mechanism that made `launch_app dry_run` a real process spawn in 2026-05-29.
+* **Numbers are converted the way `ToolArgumentParser` converts them**, not the way Gson's `Map`
+  default does: an integral value stays `Integer`/`Long`. Some normalizers read values through
+  `String.valueOf`, where a `Double` would turn `length: 150` into `"150.0"` and change the metadata
+  actually written. A test pins that, along with nested `properties` surviving the string form and
+  key order being preserved (refusal messages list the payload's keys).
+* Tests: `JsonObjectPayloadTest` 9/9 on the parser, plus `EdtValidateRequestPayloadCoercionTest`
+  driving the real tool through `execute` — the wiring, not just the rule.
+* **Not done, with a reason: the same note's ask for a validate-time container check.** It is not a rule
+  that can be lifted out — the apply-time check is `parentItem instanceof FormItemContainer` against the
+  *loaded* form model, so catching it at validate time means opening the form in the validator. That is a
+  real feature rather than a refactor, and it could not be live-validated in this session either way.
+
 ### Round-24 (2026-08-10) — BF-11156's three discovery gaps: two fixed, the third already had a tool
 
 * **`include_check_help=true` stopped omitting rules it has no description for.** A check whose
