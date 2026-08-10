@@ -9,6 +9,53 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-13 (2026-08-10) — three "silent" answers off the bus: two were real, one had already been fixed
+
+Twelve feedback notes arrived on the bus (retro window 2026-08-03…08, back-filled from task
+retrospectives). Three were taken first and each was probed live on the sandbox EDT
+(`workspace-sandbox`, build `0.1.7.20260804-1700`, projects `Accounting management` + `TestConfiguration`)
+**before** any code was touched. That order paid for itself: one of the three was already closed, and
+another turned out to be a different defect than the one reported.
+
+* **`get_diagnostics severity=error` was a no-op — it returned every warning too.** Reported as
+  "`scope=file` leaks project-wide results when `severity=error` is set". Live, `scope=file` filters by
+  file correctly under any severity; what broke is the severity gate itself. `parseSeverity` had no
+  `case "error"` branch, so the value fell through `default -> Severity.INFO` — a regression from
+  `6fa4cf7` (2026-02-15), which changed that default from `ERROR` to `INFO` without adding the explicit
+  branch. Probed on `Documents/TimeSheet/ObjectModule.bsl`: `severity=error` and `severity=info` returned
+  byte-identical answers, 2 errors **and** 98 warnings each. Since `scope=file` draws from a project-wide
+  runtime-marker stream narrowed only by a token heuristic, the unfiltered tail is what the caller read as
+  "project-wide". The rule now lives in `DiagnosticSeverityFilter` (core, unit-tested) because the UI
+  bundle has no test runtime; the tool only maps the level onto its enum.
+* **The same call could also under-report errors.** In `collectRuntimeFileMarkers` the severity gate sat
+  *inside* `forEach`, after `.limit(preLimit)`, so on a warning-heavy module the scan budget was spent on
+  markers that were then discarded. The gate moves into the stream ahead of the limit; the `sevDrop`
+  counter is unchanged.
+* **`grep`'s default corpus silently excluded 1C metadata.** Confirmed deterministically: searching
+  `GroupResponsibleTreasury` (an item name in `Catalogs/BankAccounts/Forms/ItemForm/Form.form`) returned
+  `(no matches)`, while the same search with `file_pattern='*.form'` returned both hits. The default
+  whitelist was `.bsl/.os/.java/.xml` — `.form`, `.mdo`, `.dcs`, `.rights` were never opened, and the zero
+  said nothing about it. The corpus now includes the metadata sources, extension matching is
+  case-insensitive, a path-shaped glob (`**/*.form`) matches on its last segment instead of rejecting
+  everything, and a comma-separated list is accepted. Every zero-match answer now states which corpus was
+  actually read. The companion complaint in the same note — a plain `MessageToUser` missing from `.bsl` —
+  **does not reproduce**: it is found normally.
+* **`edt_metadata_details` on `Role.*`/`ScheduledJob.*` was already fixed.** `Role.Accountant`,
+  `Role.Administration`, `ScheduledJob.AlertMailing`, `ScheduledJob.UpdatingRates` and
+  `ScheduledJob.ImportGames` all resolve in full — the kind→collection mapping landed in `7884add`
+  (2026-07-28), after the sessions the note was back-filled from. What survives is the note's actual ask:
+  the miss message conflated three causes. An unrecognized type token (`NotAKind.Whatever`) now says so
+  explicitly instead of answering `Object not found`, a supported kind states that it *was* searched, and
+  the message names the project — the two live reports both turned out to be objects belonging to a
+  different project, which reads identically to a missing object.
+* Tests: `DiagnosticSeverityFilterTest` (6), `GrepFileFilterTest` (10), `MetadataDetailsFqnRejectionTest`
+  (7, four of them new — the two that pinned the old terse wording were rewritten). Build green
+  (`-Plocal-target`), 23/23 in `surefire-reports`, new build `0.1.7.20260810-0639`.
+* **Status: live validation PENDING.** All three defects were *reproduced* live before the fix, but the
+  fixed build has not been re-probed — the sandbox redeploy needs to kill the running EDT tree and that
+  step is awaiting the owner. Note the standing lesson here: these are behavioural rules, and pure-unit
+  green has shipped live-broken fixes before.
+
 ### Round-12 (2026-08-04) — `web_publication`: the wsap pin and the publication list both told the truth about a model nobody refreshed (BF-13525)
 
 * **`wsap_version` now pins the module FILE, not the platform's `bin` directory** (`703de23`). Reported off
