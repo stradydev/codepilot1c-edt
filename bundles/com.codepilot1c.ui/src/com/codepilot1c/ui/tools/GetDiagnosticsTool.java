@@ -7,14 +7,21 @@
  */
 package com.codepilot1c.ui.tools;
 
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import com.codepilot1c.core.diagnostics.DiagnosticBaseline;
 import com.codepilot1c.core.diagnostics.DiagnosticOrigin;
+import com.codepilot1c.core.diagnostics.DiagnosticOriginSelection;
 import com.codepilot1c.core.diagnostics.DiagnosticSeverityFilter;
 import com.codepilot1c.core.logging.VibeLogger;
 import com.codepilot1c.core.tools.ITool;
 import com.codepilot1c.core.tools.ToolResult;
+import com.codepilot1c.ui.diagnostics.DiagnosticBaselineStore;
+import com.codepilot1c.ui.diagnostics.EdtDiagnostic;
 import com.codepilot1c.ui.diagnostics.EdtDiagnostic.Severity;
 import com.codepilot1c.ui.diagnostics.EdtDiagnosticsCollector;
 import com.codepilot1c.ui.diagnostics.EdtDiagnosticsCollector.DiagnosticsQuery;
@@ -80,6 +87,11 @@ public class GetDiagnosticsTool implements ITool {
                         "type": "string",
                         "description": "Narrow a scan to named areas: keep only diagnostics whose file path OR object name contains one of these substrings (case-insensitive, comma-separated, either slash accepted). USE THIS on scope=project instead of paging a whole configuration — 'CommonModules/MyModule' or 'MyModule,MySecondModule' answers 'does anything of mine show an error' without the thousands of pre-existing ones. Applied before max_items, so the limit cuts your narrowed set, not the project. Items that carry neither a path nor an object name are dropped when you narrow (they cannot be shown to belong to the area you named)."
                     },
+                    "baseline": {
+                        "type": "string",
+                        "enum": ["off", "save", "diff"],
+                        "description": "Answer 'what did MY change add' instead of re-reading a configuration's known noise. Call once with 'save' to record the current diagnostics of this scope, then 'diff' reports only what is not already in that snapshot. Default 'off'. Identity ignores the line number (an inserted procedure shifts every line below it and would otherwise make a module's whole tail look new) and counts multiplicity instead, so the diff answers 'are there MORE of these than before', not 'is this the same one'. A 'save' ignores max_items on purpose — a snapshot of a truncated scan would report everything past the cut as new next time."
+                    },
                     "line_from": {
                         "type": "integer",
                         "description": "Lower bound of the line range (1-based, inclusive). 0 = no limit. USE this together with line_to when editing/inspecting a specific method or fragment: only diagnostics within the range are returned, which sharply shrinks the response on large modules (with hundreds of warnings). Example: editing a function on lines 40-75 -> line_from=40, line_to=75."
@@ -118,7 +130,9 @@ public class GetDiagnosticsTool implements ITool {
     public String getDescription() {
         return "Live EDT diagnostics (errors/warnings) for a project, file, or active editor; grouped by rule, each tagged " //$NON-NLS-1$
                 + "with its v8-code-style rule code. Options: path_contains to narrow a project scan to named modules/areas " //$NON-NLS-1$
-                + "(the cheap way to ask 'did anything of MINE break' on a large config); line_from/line_to to focus on a " //$NON-NLS-1$
+                + "(the cheap way to ask 'did anything of MINE break' on a large config); baseline=save once then " //$NON-NLS-1$
+                + "baseline=diff to report only what your change ADDED on top of a configuration's known noise; " //$NON-NLS-1$
+                + "line_from/line_to to focus on a " //$NON-NLS-1$
                 + "method and cut tokens on big " //$NON-NLS-1$
                 + "modules; severity/max_items to filter; include_check_help=true to append the official rule explanation+fix " //$NON-NLS-1$
                 + "(use when you intend to FIX); include_runtime_markers (project-wide checks). " //$NON-NLS-1$
@@ -170,6 +184,7 @@ public class GetDiagnosticsTool implements ITool {
         // Narrowing by file path / object name. Honored on every scope and applied inside the
         // collector BEFORE the max_items cut — see EdtDiagnosticsCollector.applyPathFilter.
         String pathContains = (String) parameters.get("path_contains"); //$NON-NLS-1$
+        String baselineMode = DiagnosticBaseline.mode((String) parameters.get("baseline")); //$NON-NLS-1$
 
         // Validate parameters
         if (maxItems < 0) maxItems = 0;
@@ -182,8 +197,16 @@ public class GetDiagnosticsTool implements ITool {
         // Parse severity
         Severity minSeverity = parseSeverity(severityStr);
 
+        // A baseline works on the WHOLE scope: the query runs unlimited and the caller's max_items is
+        // applied afterwards, to what survived the diff. Limiting first would compute the diff against
+        // a truncated scan — the snapshot would miss everything past the cut and report it as new on
+        // the next call, which is the same mistake the path filter had to be moved before the limit to
+        // avoid (Round-16).
+        int reportedMaxItems = maxItems;
+        int queryMaxItems = DiagnosticBaseline.MODE_OFF.equals(baselineMode) ? maxItems : 0;
+
         DiagnosticsQuery query = new DiagnosticsQuery(
-                minSeverity, maxItems, true, waitMs, includeRuntimeMarkers, lineFrom, lineTo,
+                minSeverity, queryMaxItems, true, waitMs, includeRuntimeMarkers, lineFrom, lineTo,
                 includeCheckHelp, helpLocale, originFilter, pathContains);
         EdtDiagnosticsCollector collector = EdtDiagnosticsCollector.getInstance();
 
@@ -205,13 +228,95 @@ public class GetDiagnosticsTool implements ITool {
             default -> collector.collectFromActiveEditor(query);
         };
 
+        // The scan's identity for the baseline snapshot. Captured before the lambda because
+        // projectName is reassigned above when the default project has to be resolved.
+        final String scopeKey = "project".equals(normalizedScope) //$NON-NLS-1$
+                ? (projectName == null || projectName.isBlank() ? "workspace" : projectName) //$NON-NLS-1$
+                : path;
+
         return resultFuture.thenApply(result -> {
-            String formatted = result.formatForLlm();
-            return ToolResult.success(formatted);
+            if (DiagnosticBaseline.MODE_OFF.equals(baselineMode)) {
+                return ToolResult.success(result.formatForLlm());
+            }
+            String key = scopeKey == null || scopeKey.isBlank() ? result.filePath() : scopeKey;
+            return applyBaseline(result, baselineMode, key, reportedMaxItems);
         }).exceptionally(e -> {
             LOG.error("get_diagnostics failed: %s", e.getMessage()); //$NON-NLS-1$
             return ToolResult.failure("Failed to get diagnostics: " + e.getMessage()); //$NON-NLS-1$
         });
+    }
+
+    /**
+     * Applies the {@code baseline} mode to a finished scan: records the snapshot, or reports only what
+     * the snapshot does not already account for.
+     *
+     * <p>Only the mechanical part is here — read the file, map each diagnostic to its fingerprint, keep
+     * the indices core selected, recount, trim. Every decision ({@code fingerprint}, {@code selectNew},
+     * the serialized format, the note wording) is {@link DiagnosticBaseline} in core, because this
+     * bundle has no test runtime and a rule that cannot be tested does not belong in it.</p>
+     *
+     * <p>The counts are recomputed from the reported subset with the same origin-aware helper the
+     * collector uses, so a diff cannot claim the project's total error count while showing three items.
+     * Any storage failure reports the scan in full with a note saying so — never a filtered-looking
+     * answer that was not filtered.</p>
+     */
+    private ToolResult applyBaseline(
+            DiagnosticsResult result, String mode, String scopeKey, int maxItems) {
+        List<EdtDiagnostic> all = result.diagnostics();
+        List<String> fingerprints = new ArrayList<>(all.size());
+        for (EdtDiagnostic diagnostic : all) {
+            fingerprints.add(DiagnosticBaseline.fingerprint(
+                    diagnostic.checkId(), diagnostic.filePath(),
+                    diagnostic.objectPresentation(), diagnostic.message()));
+        }
+
+        if (DiagnosticBaseline.MODE_SAVE.equals(mode)) {
+            String savedAt = Instant.now().toString();
+            DiagnosticBaselineStore.Access written = DiagnosticBaselineStore.write(
+                    scopeKey, DiagnosticBaseline.serialize(savedAt, DiagnosticBaseline.tally(fingerprints)));
+            if (!written.ok()) {
+                LOG.warn("baseline save failed for %s: %s", scopeKey, written.reason()); //$NON-NLS-1$
+                return ToolResult.success(result.formatForLlm()
+                        + DiagnosticBaseline.unavailableNote(mode, written.reason()));
+            }
+            return ToolResult.success(result.formatForLlm()
+                    + DiagnosticBaseline.saveNote(fingerprints.size(), savedAt, maxItems > 0));
+        }
+
+        DiagnosticBaselineStore.Access stored = DiagnosticBaselineStore.read(scopeKey);
+        if (!stored.ok()) {
+            LOG.warn("baseline read failed for %s: %s", scopeKey, stored.reason()); //$NON-NLS-1$
+            return ToolResult.success(result.formatForLlm()
+                    + DiagnosticBaseline.unavailableNote(mode, stored.reason()));
+        }
+        if (stored.text() == null || stored.text().isBlank()) {
+            return ToolResult.success(result.formatForLlm() + DiagnosticBaseline.noBaselineNote());
+        }
+
+        DiagnosticBaseline.Snapshot snapshot = DiagnosticBaseline.parse(stored.text());
+        List<Integer> keptIndices = DiagnosticBaseline.selectNew(snapshot, fingerprints);
+        int suppressed = all.size() - keptIndices.size();
+        List<EdtDiagnostic> reported = new ArrayList<>(keptIndices.size());
+        for (int index : keptIndices) {
+            reported.add(all.get(index));
+        }
+        // The caller's limit applies to the narrowed set, last, exactly as it does after the path
+        // filter in the collector.
+        if (maxItems > 0 && reported.size() > maxItems) {
+            reported = new ArrayList<>(reported.subList(0, maxItems));
+        }
+        int[] counts = DiagnosticOriginSelection.countBySeverity(
+                reported,
+                EdtDiagnostic::origin,
+                d -> d.severity() == null ? 0 : d.severity().getLevel());
+        DiagnosticsResult filtered = new DiagnosticsResult(
+                result.filePath(), result.editorDirty(), reported,
+                counts[DiagnosticOriginSelection.ERRORS],
+                counts[DiagnosticOriginSelection.WARNINGS],
+                counts[DiagnosticOriginSelection.INFOS],
+                result.checkDetails());
+        return ToolResult.success(filtered.formatForLlm()
+                + DiagnosticBaseline.diffNote(suppressed, snapshot.savedAt()));
     }
 
     /**

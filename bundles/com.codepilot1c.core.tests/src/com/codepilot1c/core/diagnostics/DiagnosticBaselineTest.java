@@ -8,6 +8,7 @@
 package com.codepilot1c.core.diagnostics;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -128,5 +129,76 @@ public class DiagnosticBaselineTest {
     public void anEmptySnapshotIsRecognizableAsEmpty() {
         assertTrue(DiagnosticBaseline.parse(null).isEmpty());
         assertTrue(DiagnosticBaseline.parse("# codepilot1c-diagnostics-baseline v1 s\n").isEmpty());
+    }
+
+    // --- storage file name --------------------------------------------------
+
+    @Test
+    public void aProjectNameWithSpacesBecomesOneUsableFileName() {
+        // "Accounting management" is the real sandbox project; a raw name is not a legal file name.
+        assertEquals("Accounting_management.txt", DiagnosticBaseline.storageFileName("Accounting management"));
+    }
+
+    @Test
+    public void noScopeKeyCanEscapeTheBaselineDirectory() {
+        // Every separator maps to '_', so the result is always a single path segment.
+        for (String hostile : List.of("../../etc/passwd", "a/b\\c", "C:\\Windows\\x", "..\\..\\y")) {
+            String name = DiagnosticBaseline.storageFileName(hostile);
+            assertFalse(name, name.contains("/"));
+            assertFalse(name, name.contains("\\"));
+            assertFalse(name, name.contains(":"));
+        }
+    }
+
+    @Test
+    public void aBlankScopeKeyStillYieldsAName() {
+        assertEquals("default.txt", DiagnosticBaseline.storageFileName(null));
+        assertEquals("default.txt", DiagnosticBaseline.storageFileName("   "));
+    }
+
+    @Test
+    public void twoDifferentLongKeysDoNotCollapseOntoOneSnapshot() {
+        String a = "x".repeat(160) + "-alpha";
+        String b = "x".repeat(160) + "-beta";
+        assertNotEquals(DiagnosticBaseline.storageFileName(a), DiagnosticBaseline.storageFileName(b));
+    }
+
+    // --- notes: a filtered answer must never look like a clean one ----------
+
+    @Test
+    public void theDiffNoteStatesHowManyWereHiddenAndHowToSeeThem() {
+        String note = DiagnosticBaseline.diffNote(6402, "2026-08-10T09:00:00Z");
+        assertTrue(note, note.contains("6402"));
+        assertTrue(note, note.contains("2026-08-10T09:00:00Z"));
+        assertTrue(note, note.contains("baseline=off"));
+    }
+
+    @Test
+    public void theDiffNoteSurvivesAnUnstampedSnapshot() {
+        String note = DiagnosticBaseline.diffNote(1, "");
+        assertTrue(note, note.contains("unstamped"));
+        assertTrue(note, note.contains("1 pre-existing diagnostic "));
+    }
+
+    @Test
+    public void aFirstDiffSaysNothingIsRecordedRatherThanLookingClean() {
+        String note = DiagnosticBaseline.noBaselineNote();
+        assertTrue(note, note.contains("no baseline"));
+        assertTrue(note, note.contains("baseline=save"));
+    }
+
+    @Test
+    public void theSaveNoteAdmitsOverridingTheLimitOnlyWhenOneWasAsked() {
+        assertTrue(DiagnosticBaseline.saveNote(12, "stamp", true).contains("max_items was ignored"));
+        assertFalse(DiagnosticBaseline.saveNote(12, "stamp", false).contains("max_items"));
+        assertTrue(DiagnosticBaseline.saveNote(12, "stamp", false).contains("12 diagnostics recorded"));
+    }
+
+    @Test
+    public void anUnusableStorageSaysNothingWasFiltered() {
+        // The dangerous outcome would be a full report that READS as a diff.
+        String note = DiagnosticBaseline.unavailableNote(DiagnosticBaseline.MODE_DIFF, "access denied");
+        assertTrue(note, note.contains("access denied"));
+        assertTrue(note, note.contains("nothing was filtered"));
     }
 }

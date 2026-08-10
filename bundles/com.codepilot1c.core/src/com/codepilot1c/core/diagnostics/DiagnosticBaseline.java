@@ -51,6 +51,9 @@ public final class DiagnosticBaseline {
 
     private static final String HEADER_PREFIX = "# codepilot1c-diagnostics-baseline v1 "; //$NON-NLS-1$
 
+    /** Longest stem a snapshot file name keeps before it is truncated and hash-suffixed. */
+    private static final int MAX_FILE_NAME_STEM = 100;
+
     private DiagnosticBaseline() {
         // utility
     }
@@ -210,6 +213,97 @@ public final class DiagnosticBaseline {
             }
         }
         return new Snapshot(savedAt, counts);
+    }
+
+    /**
+     * Turns a scope key — a project name or a workspace-relative file path — into one file name.
+     *
+     * <p>Every character that is not a letter, a digit, {@code -} or {@code .} becomes {@code _}, which
+     * is what makes {@code Accounting management} and {@code src/Module.bsl} usable as file names at
+     * all. Because no path separator can survive that mapping, a scope key cannot escape the baseline
+     * directory however it is spelled. Long keys are truncated with a hash suffix so two different long
+     * keys cannot collapse onto one snapshot.</p>
+     *
+     * @param scopeKey the scan's identity, may be {@code null}
+     * @return a file name, never blank
+     */
+    public static String storageFileName(String scopeKey) {
+        String base = scopeKey == null ? "" : scopeKey.strip(); //$NON-NLS-1$
+        if (base.isEmpty()) {
+            base = "default"; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder(base.length());
+        for (int i = 0; i < base.length(); i++) {
+            char c = base.charAt(i);
+            sb.append(Character.isLetterOrDigit(c) || c == '-' || c == '.' ? c : '_');
+        }
+        String name = sb.toString();
+        if (name.length() > MAX_FILE_NAME_STEM) {
+            name = name.substring(0, MAX_FILE_NAME_STEM) + '-' + Integer.toHexString(base.hashCode());
+        }
+        return name + ".txt"; //$NON-NLS-1$
+    }
+
+    /**
+     * The note a {@code diff} appends, stating what was hidden and how to see it again.
+     *
+     * <p>It always names the count and the baseline's stamp: a diff that silently reports fewer
+     * diagnostics than exist is indistinguishable from a clean scan, which is the same failure the
+     * {@code severity=error} no-op once produced.</p>
+     *
+     * @param suppressed how many pre-existing occurrences were not reported
+     * @param savedAt the stamp of the baseline used, may be blank
+     * @return the note, starting on its own line
+     */
+    public static String diffNote(int suppressed, String savedAt) {
+        String stamp = savedAt == null || savedAt.isBlank() ? "an unstamped snapshot" : savedAt; //$NON-NLS-1$
+        return "\n\nNote: baseline diff — " + suppressed //$NON-NLS-1$
+                + (suppressed == 1 ? " pre-existing diagnostic" : " pre-existing diagnostics") //$NON-NLS-1$ //$NON-NLS-2$
+                + " not shown (baseline of " + stamp + "). Pass baseline=save to re-record it," //$NON-NLS-1$ //$NON-NLS-2$
+                + " baseline=off to see everything."; //$NON-NLS-1$
+    }
+
+    /** The note for a {@code diff} with nothing recorded yet: everything is reported, and why. */
+    public static String noBaselineNote() {
+        return "\n\nNote: no baseline is recorded for this scope, so everything below counts as new." //$NON-NLS-1$
+                + " Pass baseline=save once to record the current state, then baseline=diff answers" //$NON-NLS-1$
+                + " \"what did my change add\"."; //$NON-NLS-1$
+    }
+
+    /**
+     * The note a {@code save} appends.
+     *
+     * @param recorded how many occurrences went into the snapshot
+     * @param savedAt the stamp written into it
+     * @param maxItemsIgnored whether the caller had asked for a limit that was overridden
+     * @return the note, starting on its own line
+     */
+    public static String saveNote(int recorded, String savedAt, boolean maxItemsIgnored) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\nNote: baseline saved at ").append(savedAt) //$NON-NLS-1$
+                .append(" — ").append(recorded) //$NON-NLS-1$
+                .append(recorded == 1 ? " diagnostic recorded." : " diagnostics recorded."); //$NON-NLS-1$ //$NON-NLS-2$
+        if (maxItemsIgnored) {
+            // A snapshot taken from a truncated scan would make every item beyond the cut look new on
+            // the next diff — the limit has to lose to the snapshot, and the caller has to be told.
+            sb.append(" max_items was ignored for this call so the snapshot covers the whole scope."); //$NON-NLS-1$
+        }
+        sb.append(" Call baseline=diff from now on to see only what is added on top of it."); //$NON-NLS-1$
+        return sb.toString();
+    }
+
+    /**
+     * The note for a baseline that could not be read or written. The diagnostics are still reported in
+     * full — a storage problem must degrade into "no filtering", never into a failed call or, worse,
+     * into a silently unfiltered answer that looks filtered.
+     *
+     * @param mode the requested mode
+     * @param reason a short human-readable cause
+     * @return the note, starting on its own line
+     */
+    public static String unavailableNote(String mode, String reason) {
+        return "\n\nNote: baseline=" + mode + " could not use its storage (" + reason //$NON-NLS-1$ //$NON-NLS-2$
+                + "), so nothing was filtered and everything above is reported as-is."; //$NON-NLS-1$
     }
 
     /**

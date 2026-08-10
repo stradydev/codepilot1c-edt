@@ -101,6 +101,31 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-18 (2026-08-10) — `get_diagnostics baseline`: the diff rule is now reachable from the tool
+
+* **`baseline` = `off` | `save` | `diff`.** Round-16 implemented and tested the rule in core but left it
+  unwired, so the token-volume feedback note was only half answered. `save` records the current
+  diagnostics of a scope, `diff` then reports only what that snapshot does not already account for —
+  which is what "did my change add anything" costs on a configuration with ~6.4k baseline errors.
+* **A baseline always scans the whole scope; the caller's `max_items` is applied afterwards, to what
+  survived the diff.** Limiting first would diff against a truncated scan: the snapshot would miss
+  everything past the cut and report it as new on the very next call. `save` therefore overrides
+  `max_items` outright and the note says so — the same ordering lesson as moving the path filter before
+  the limit in Round-16, where the severity gate had been wrong in exactly this way until `5a851a7`.
+* **The counts are recomputed from the reported subset** with the collector's own origin-aware helper, so
+  a diff cannot show three items under the project's full error total.
+* **A filtered answer never looks like a clean one.** Every path appends a note: how many pre-existing
+  items were hidden and the snapshot's stamp; that nothing is recorded yet on a first `diff`; that
+  `max_items` lost to a `save`. A storage failure reports the scan in full and says the filter did not
+  run — the one outcome worth engineering against is a full report that READS as a diff.
+* **Snapshots live in `<workspace>/.codepilot/diagnostics-baseline/<scope>.txt`**, one per project or
+  file, chosen over hidden plugin state so a stale baseline is a file you can look at and delete.
+  `DiagnosticBaselineStore` (UI) does the I/O and nothing else; the file name is core
+  (`storageFileName`), where it is tested — every separator maps to `_`, so no scope key can escape the
+  directory, and long keys get a hash suffix so two of them cannot collapse onto one snapshot.
+* Tests: `DiagnosticBaselineTest` grows from 11 to 20, covering the file name, the traversal property and
+  each note's promise. Live validation pending the next sandbox redeploy.
+
 ### Round-17 (2026-08-10) — `delete_metadata`: the non-`force` top-level delete was unreachable, and the report that turned out to be my own reading mistake
 
 * **A top-level object could never be deleted without `force=true`.** The gate read
