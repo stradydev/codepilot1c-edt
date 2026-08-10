@@ -35,16 +35,49 @@ as what was actually observed rather than as a pass/fail tally:
 * **CONFIRMED — module kind (Round-20)** and **the `src/`-prefix fallback (half of Round-19)**:
   `bsl_module_context` reports `OBJECT_MODULE` (not the old blanket `COMMON_MODULE`), and resolves both
   the documented spelling and the `src/`-prefixed one a caller pastes out of `glob`.
-* **REGRESSION FOUND — `bsl_object_context` (the other half of Round-19).** Every call that actually
-  reaches a module now times out — on a large document module and on a 2-file project's tiny common
-  module alike — while the same underlying `bsl_module_context`/`bsl_module_exports` calls are instant
-  on the same files. Fixing the doubled-`src/` lookup made the success path reachable for the first
-  time and it does not return. Four candidate causes were tested and refuted; details, the refutations,
-  and the suggested diagnostic-build step are in
-  `issues/2026-08-10-bsl-object-context-hangs-once-modules-resolve.md`. The feedback note
-  `2026-08-08-bsl-object-context-false-missing-modules-existing-files` therefore stays OPEN.
+* **REGRESSION FOUND — `bsl_object_context` (the other half of Round-19)** — every call that actually
+  reaches a module timed out, on a large document module and on a 2-file project's tiny common module
+  alike. **Root-caused and fixed the same day; see Round-27 below.** It was never a hang: it was a
+  30 s OSGi wait that can never succeed, paid once per delegate call. The claim recorded here that the
+  underlying `bsl_module_context` was "instant on the same file" was **a mismeasurement** — timed
+  properly it takes exactly 30 s, which is precisely the defect.
 * **Still pending:** baseline save/diff (Round-18), the endpoint gate (Round-23), the check-help
   rendering (Round-24) and the new RLS write (Round-26).
+
+### Round-27 (2026-08-10) — stop waiting 30 s for a service that is not an OSGi service
+
+`bsl_object_context` read as a hang. It was arithmetic: **exactly 60 s** on a one-module object,
+**exactly 120 s** on a two-module Document, and the MCP client gave up first. Each delegate call spent
+a flat 30 s in `ServiceTracker.waitForService` for `BmAwareResourceSetProvider`, then fell back to a
+standalone resource set and answered correctly.
+
+* **The wait was unwinnable, not slow.** EDT's `com._1c.g5.v8.dt.bm.xtext` activator publishes exactly
+  four OSGi services and this provider is not one of them — it is bound in that bundle's `CoreModule`
+  as Xtext's `IResourceSetProvider`, i.e. a **Guice language-injector** binding. The same mismatch
+  already documented for `IWebServerPublishDelegateRegistry`. Live corroboration: the sandbox workspace
+  log held 21 `service not available after wait (30000 ms)` entries — **21 of 21 for this service and
+  none for any other tracked service** — across a six-hour session with both projects READY.
+* **`VibeCorePlugin.getResourceSetProvider()` is now the non-blocking registry lookup**, with the
+  evidence in its Javadoc and one log line per session explaining the absence instead of 21 identical
+  warnings. Every *other* tracked service keeps its 30 s grace: those do appear during startup, and not
+  one of them ever timed out.
+* **Latency only — no answer changes.** All four consumers already degraded gracefully on `null`. The
+  wait was costing 30 s per `bsl_*` call, 30 s × modules × 2 in `bsl_object_context`, 30 s **per
+  resolved reference** in `edt_find_references`, and 30 s per `inspect_platform_reference` resource-set
+  lookup.
+* **Diagnosed with `jstack`, not a diagnostic build.** The sandbox EDT is a HotSpot 17 process and a
+  JDK is on the box, so one thread dump taken while the call was stuck named the frame outright. That
+  is now the first move for any live-only symptom that can be held open on demand — cheaper than a
+  build-and-install round by a wide margin.
+* **No unit test, deliberately.** The property is "does not block inside a live OSGi registry"; with
+  the `null` tracker of the test runtime the *old* code also returned instantly, so any in-reactor test
+  would have passed before the fix too. Validated by live latency measurement instead.
+
+Details, the thread-dump frame, and why the four earlier hypotheses all missed:
+`issues/2026-08-10-bsl-object-context-hangs-once-modules-resolve.md`. The fallback's own cost — a
+module's `owner` never resolves, because the standalone resource set has no BM link — is filed
+separately as `issues/2026-08-10-bsl-module-owner-unresolved-standalone-resource-set.md`, with the
+decompile facts already grounded so the fix does not have to re-derive them.
 
 ### Round-26 (2026-08-10) — `rights_manage` can author an RLS condition
 

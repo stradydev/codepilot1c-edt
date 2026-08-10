@@ -1,10 +1,8 @@
 # `bsl_object_context` times out whenever it actually reaches a module — Round-19 traded a wrong answer for no answer
 
 **Found:** 2026-08-10, live on sandbox build `0.1.7.20260810-1011` (the build carrying Round-16…26).
-**Status:** OPEN, reproduced, root cause narrowed to `BslObjectContextService#collectModuleSections`.
-**Severity:** high — the tool is unusable for its primary purpose. It is a *regression in reach*, not in
-correctness: nothing returns a wrong answer, but the call that used to answer "missing" now returns
-nothing at all.
+**Status:** **ROOT-CAUSED and FIXED** 2026-08-10 (same day) — not a hang at all. See §Root cause.
+**Severity:** was high — the tool was unusable for its primary purpose.
 
 ## What happens
 
@@ -23,48 +21,89 @@ The two "instant" rows are the ones that never run `collectModuleSections`: `met
 section wholesale (`BslObjectContextService:113`), and clearing both module flags makes
 `includesModulePath` reject every path.
 
-## Why it is not what it looks like
+## Root cause — a 30 s OSGi wait that can never succeed, paid per delegate call
 
-Three plausible explanations were tested and **refuted** — worth recording so they are not re-tried:
+It never hung. It was **exactly 60 s** on a one-module object and **exactly 120 s** on a two-module
+Document, and the MCP client timed out first.
 
-1. **Not the underlying services.** Both calls the loop makes are fast standalone on the very same
-   file: `bsl_module_context` on `Documents/AdvanceReport/ObjectModule.bsl` returns in well under a
-   second (`moduleType: OBJECT_MODULE`, 4 methods), and `bsl_module_exports` with the same `limit=200`
-   the aggregator uses returns 2 items just as fast.
-2. **Not the path spelling.** Round-19's `SourceFilePathCandidates` was the obvious suspect, since an
-   already-prefixed input is tried as `src/src/…` first. But *both* spellings resolve instantly through
-   `bsl_module_context` — the documented `Documents/…` and the `src/Documents/…` a caller pastes out of
-   `glob`. (That fallback is therefore **confirmed working live**, which is the other half of Round-19.)
-3. **Not cold Xtext loading.** The aggregator still timed out after the same resources had just been
-   loaded and answered by the two standalone calls.
-4. **Not GSON choking on a cyclic graph.** `BslModuleContextResult` and `BslModuleExportsResult` are
-   both flat POJOs (String/int/`List<BslMethodInfo>`), so `GSON.toJsonTree` on them is trivial.
+`BslSemanticService.resolveResourceSet` → `EdtServiceGateway.getResourceSetProvider()` →
+`VibeCorePlugin.getResourceSetProvider()` → `getTrackedService(...)`, which grants an unregistered
+service `EDT_SERVICE_WAIT_TOTAL_MS` = **30 s** to appear before giving up. For
+`BmAwareResourceSetProvider` that wait is unwinnable — the provider is **not an OSGi service at all**:
 
-**Not size-related either** — it reproduces on a 2-file project's small `CommonModule` just as it does
-on a 291-line document module.
+- **Bytecode** (`com._1c.g5.v8.dt.bm.xtext_17.0.600`, EDT 2025.2.3): the activator
+  `BmXtextPlugin.lambda$1()` publishes exactly four services through
+  `InjectorAwareServiceRegistrator` — `BslMarkerRemover` (managed), `BuildOrchestrator`,
+  `IResourceDescriptionRepository`, `IDependentModelProvider`. The provider is not among them. It is
+  bound in `com._1c.g5.v8.dt.bm.xtext.CoreModule` as Xtext's
+  `org.eclipse.xtext.ui.resource.IResourceSetProvider` — a **Guice language-injector** binding.
+  Exactly the mismatch already documented for `IWebServerPublishDelegateRegistry`
+  (`PublishDelegateRegistryResolver`).
+- **Live**: the sandbox workspace log held 21 `EDT service not available after wait (30000 ms)`
+  entries — **21 of 21 for this service, none for any other tracked service**, over a six-hour
+  session with both projects READY. It has never once resolved.
 
-## Where that leaves it
+So each of the aggregator's delegate calls (`getModuleContext`, `getModuleExports`) burned a flat
+30 s in `ServiceTracker.waitForService`, then fell back to a standalone Xtext resource set and
+produced a correct answer. One module → 2 × 30 s. A Document → 4 × 30 s.
 
-The hang is inside `collectModuleSections` itself, on the **success** path — the one that Round-19
-(`0edd4e0`) made reachable for the first time. Before that fix every module lookup threw
-`EdtAstException` and was recorded as `status: missing`, so the body after
-`bslSemanticService.getModuleContext(...)` had effectively never executed against a resolvable file.
-Fixing the path exposed whatever is wrong further in.
+### How it was caught in one shot
 
-That also means the original feedback note
-(`2026-08-08-bsl-object-context-false-missing-modules-existing-files`) is **not yet closeable**: the
-"missing" is gone, but the caller still cannot get the modules.
+A thread dump of the live sandbox EDT (`jstack <pid>`; the sandbox instance is identifiable by
+`-data file:/…/workspace-sandbox/` in its command line) taken while a call was stuck named the frame
+directly:
 
-## Suggested next step
+```
+org.osgi.util.tracker.ServiceTracker.waitForService(ServiceTracker.java:507)
+com.codepilot1c.core.internal.VibeCorePlugin.getTrackedService(VibeCorePlugin.java:483)
+com.codepilot1c.core.internal.VibeCorePlugin.getResourceSetProvider(VibeCorePlugin.java:344)
+com.codepilot1c.core.edt.ast.EdtServiceGateway.getResourceSetProvider(EdtServiceGateway.java:126)
+com.codepilot1c.core.edt.lang.BslSemanticService.resolveResourceSet(BslSemanticService.java:492)
+…
+com.codepilot1c.core.edt.context.BslObjectContextService.collectModuleSections(…:171)
+```
 
-This is a live-only symptom with no exception surfacing, so it fits the diagnostic-build-round method:
-ship a build that logs entry/exit around each of the four steps in the loop body
-(`getModuleContext`, `toJsonTree(ctx)`, `getModuleExports`, `toJsonTree(exports)`) with elapsed
-millis, and let one live call say which one never returns. A thread dump taken while a call is stuck
-would settle it in one shot if the workbench can be reached at that moment.
+**No diagnostic build round was needed.** `jstack` attaches to the running EDT (Zulu 17 JDK is on
+this box, EDT runs HotSpot 17), so a live-only symptom in a *foreground* call is one dump away from a
+stack. Prefer this over shipping a logging build whenever the symptom can be held open on demand.
 
-Do **not** guess-fix by adding a timeout around the loop: that would convert a hang into a partial
-answer and hide the real defect.
+### Why the earlier four refutations all missed it
+
+They were all aimed inside the loop body, but the cost sat in service resolution *inside each
+delegate call* — the one place shared by the loop and the "fast" standalone control.
+
+Refutation 1 ("not the underlying services — both are fast standalone, well under a second") was
+simply **a mismeasurement**: timed properly, `bsl_module_context` on the very same file takes
+**exactly 30 s**. The whole `bsl_*` family paid it, on every call, and nobody noticed because a
+single call stayed under the client timeout. "Feels fast" is not a measurement — stamp the clock.
+
+## Fix
+
+`VibeCorePlugin.getResourceSetProvider()` no longer routes through the blocking `getTrackedService`;
+it is now the non-blocking registry lookup (identical to `peekResourceSetProvider()`), with the
+evidence in its Javadoc and a once-per-session log line explaining the absence. Every sibling
+service keeps its 30 s grace — they legitimately appear during startup, and none of them ever timed
+out.
+
+All four consumers already degraded gracefully on `null` (standalone resource set / skipped line
+number), so this changes latency only, never the answer:
+
+| Consumer | Was |
+|---|---|
+| `BslSemanticService.resolveResourceSet` (whole `bsl_*` family) | 30 s per call |
+| `BslObjectContextService.collectModuleSections` | 30 s × modules × 2 |
+| `EdtReferenceService.extractLineNumberFromSourceUri` | 30 s **per resolved reference** |
+| `EdtPlatformDocumentationService.resolveResourceSet` | 30 s per call |
+
+No unit test accompanies the fix, deliberately: the property is "does not block 30 s inside a live
+OSGi service registry", which no in-reactor test can observe (with a `null` tracker — the state in
+the test runtime — the old code also returned instantly, so a test would have passed before the fix
+too). Validation is a live latency measurement, recorded in the CHANGELOG.
+
+## Follow-up, tracked separately
+
+The standalone fallback answers, but it answers *worse* — the module's `owner` never resolves. See
+`2026-08-10-bsl-module-owner-unresolved-standalone-resource-set.md`.
 
 ## Also observed in the same session
 

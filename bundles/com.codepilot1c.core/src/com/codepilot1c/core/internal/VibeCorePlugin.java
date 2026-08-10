@@ -8,6 +8,7 @@
 package com.codepilot1c.core.internal;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.IStatus;
@@ -75,6 +76,8 @@ public class VibeCorePlugin extends Plugin {
     private ServiceTracker<IMdAdoptedPropertyAccess, IMdAdoptedPropertyAccess> mdAdoptedPropertyAccessTracker;
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> resourceSetProviderTracker;
+    /** Keeps {@link #getResourceSetProvider()}'s explanation to one log entry per session. */
+    private final AtomicBoolean resourceSetProviderAbsenceLogged = new AtomicBoolean();
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
     private ServiceTracker<IMarkerManager, IMarkerManager> markerManagerTracker;
     private ServiceTracker<ICheckRepository, ICheckRepository> checkRepositoryTracker;
@@ -340,17 +343,63 @@ public class VibeCorePlugin extends Plugin {
         return getTrackedService(derivedDataManagerProviderTracker, "IDerivedDataManagerProvider"); //$NON-NLS-1$
     }
 
+    /**
+     * Returns EDT's {@link BmAwareResourceSetProvider}, or {@code null} immediately when it is
+     * absent from the OSGi service registry.
+     *
+     * <p><b>Never blocks</b> — unlike every sibling getter here, which grants an unregistered
+     * service the standard {@value #EDT_SERVICE_WAIT_TOTAL_MS} ms grace period to appear. That
+     * wait is not merely unhelpful for this one service, it is unwinnable: the provider is a
+     * Guice binding, never an OSGi service, so {@link ServiceTracker#waitForService} always
+     * spends the full timeout and then returns {@code null} anyway. Two independent proofs
+     * (2026-08-10, EDT 2025.2.3):</p>
+     * <ul>
+     *   <li>Bytecode: the owning bundle's activator
+     *       ({@code com._1c.g5.v8.dt.bm.internal.xtext.BmXtextPlugin}) publishes exactly four
+     *       services through {@code InjectorAwareServiceRegistrator} — {@code BslMarkerRemover},
+     *       {@code BuildOrchestrator}, {@code IResourceDescriptionRepository},
+     *       {@code IDependentModelProvider}. The provider is not among them; it is bound in
+     *       {@code com._1c.g5.v8.dt.bm.xtext.CoreModule} as Xtext's
+     *       {@code org.eclipse.xtext.ui.resource.IResourceSetProvider}, i.e. it lives in a
+     *       language injector. Same class of mismatch as
+     *       {@code IWebServerPublishDelegateRegistry} — see
+     *       {@code PublishDelegateRegistryResolver}.</li>
+     *   <li>Live: a sandbox workspace log carried 21 "EDT service not available after wait
+     *       (30000 ms)" entries, all 21 for this service and none for any other tracked service,
+     *       across a six-hour session with both projects READY.</li>
+     * </ul>
+     *
+     * <p>The cost was paid per call by every consumer, so the aggregating
+     * {@code bsl_object_context} — two delegate calls per module — sat at a flat 60 s on a
+     * one-module object and 120 s on a Document, i.e. past the MCP client timeout, and read as a
+     * hang. {@code edt_find_references} paid it once per resolved reference. All consumers
+     * already degrade gracefully on {@code null} (a standalone Xtext resource set, a skipped line
+     * number), so failing fast changes latency only, never the answer.</p>
+     *
+     * <p>Kept as a registry lookup rather than deleted: should a later EDT build register the
+     * provider after all, {@link ServiceTracker#getService()} picks it up on the next call with no
+     * further change here.</p>
+     *
+     * @return the provider, or {@code null} when it is not in the OSGi registry
+     */
     public BmAwareResourceSetProvider getResourceSetProvider() {
-        return getTrackedService(resourceSetProviderTracker, "BmAwareResourceSetProvider"); //$NON-NLS-1$
+        BmAwareResourceSetProvider service = peekResourceSetProvider();
+        if (service == null && resourceSetProviderAbsenceLogged.compareAndSet(false, true)) {
+            logWarn("BmAwareResourceSetProvider is not an OSGi service on this EDT build " //$NON-NLS-1$
+                    + "(it is a Guice/Xtext language-injector binding), so it is never waited for. " //$NON-NLS-1$
+                    + "Callers fall back to a standalone resource set — module owners stay " //$NON-NLS-1$
+                    + "unresolved. Logged once per session."); //$NON-NLS-1$
+        }
+        return service;
     }
 
     /**
      * Returns the currently-tracked {@link BmAwareResourceSetProvider}, or
-     * {@code null} immediately when the service is not yet registered. In
-     * contrast to {@link #getResourceSetProvider()} this never blocks
-     * waiting for the service to appear — required by callers (e.g.
-     * {@code get_diagnostics scope=file}) whose latency budget cannot
-     * absorb the standard 30 s wait.
+     * {@code null} immediately when the service is not yet registered.
+     * Identical in effect to {@link #getResourceSetProvider()} — kept as a
+     * separate name for the callers (e.g. {@code get_diagnostics scope=file})
+     * that documented their intolerance of the 30 s wait back when the other
+     * getter still paid it.
      */
     public BmAwareResourceSetProvider peekResourceSetProvider() {
         ServiceTracker<BmAwareResourceSetProvider, BmAwareResourceSetProvider> tracker = resourceSetProviderTracker;
