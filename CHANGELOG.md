@@ -91,6 +91,42 @@ another turned out to be a different defect than the one reported.
   `NOT_EQUAL`): the synthetic-filter run came back `status=no_tests_matched`, `reason=infobase_stale` — the
   exact pair the infra step rejects. Tests: `YaxunitRunToolTest` 20/20, the stale-blame case rewritten.
 
+### Round-15 (2026-08-10) — `create_metadata adopt_existing`: the orphan path was live-validated on the sandbox after all (BF-13405)
+
+* **Status: LIVE-VALIDATED 2026-08-10**, sandbox EDT (`workspace-sandbox`, build `0.1.7.20260810-0639`,
+  project `TestConfiguration`). No stack, no provisioned infobase, no `File_am_BF-13405`.
+* **The 2026-07-28 entry above is corrected: "the two-index desync cannot be synthesised" is wrong.** That
+  wave delegated the `adopt_existing` orphan path to "the stacks that hold the fixtures" on the grounds that
+  the A/B desync was not reproducible locally. It is reproducible, and the recipe follows directly from the
+  mechanism that same entry documents — index **B** registers every `.mdo` on disk regardless of whether
+  `Configuration.mdo` mentions it. So: write a `CommonModule` `.mdo` (+ `Module.bsl`) into
+  `src/CommonModules/<Name>/` **bypassing the plugin**, then refresh the project. The write must bypass the
+  plugin because `write_file` correctly refuses `.mdo` files and refuses to create new files at all — and
+  bypassing is the faithful reproduction anyway, since the real orphan comes from a merge or a partial
+  import, not from a tool call. `get_diagnostics(scope=project)` is a convenient refresh: it calls
+  `refreshLocal(DEPTH_INFINITE)` on the project.
+* **Confirmed live, end to end:** the desync presents exactly as reported (`edt_metadata_details` →
+  `exists:false` while `create_metadata` → `METADATA_ALREADY_EXISTS`), and the refusal names the cure
+  precisely, including that `adopt_existing:true` must also be passed in the `edt_validate_request` payload.
+  With `adopt_existing=true` the object is registered into `Configuration.commonModules`
+  (`adopted:true`, `registered_into` echoed) and afterwards resolves through `edt_metadata_details` **under
+  its original uuid** — proof it adopted the existing top object rather than authoring a new one. The
+  adopted `.mdo` is not mutated: uuid and synonym survive untouched, matching the documented contract that
+  `properties` are ignored on adoption.
+* **EOL guard covers the adoption path.** Checked deliberately, because adoption rewrites `Configuration.mdo`
+  and the sandbox project happens to be mixed-EOL (its `Configuration.mdo` is CRLF, its `Error.mdo` is LF), so
+  a first reading proved nothing. `Configuration.mdo` was normalised to LF and a second orphan adopted: the
+  file stayed LF (0 CRLF pairs) and grew by exactly the one `<commonModules>` line. No flip.
+* Both probes were removed afterwards (`delete_metadata`, and see the next bullet for why it needed two
+  overrides); `Configuration.mdo` is back to its original 57 lines, 2 `<commonModules>` entries against 2
+  directories on disk, CRLF restored.
+* **Two defects observed while doing this, filed in `issues/2026-08-10-sandbox-probe-findings.md`, not fixed
+  here:** `get_diagnostics` silently ignores a misspelled `projectName` and answers about the *default*
+  project instead (the unknown-parameter note that other tools emit is not wired for it — a wrong-project
+  answer presented as correct), and `delete_metadata` counts an object's own `Configuration#commonModules`
+  membership and its own `#source` as blocking references, which may make the non-`force` top-level delete
+  path unreachable in general.
+
 ### Round-12 (2026-08-04) — `web_publication`: the wsap pin and the publication list both told the truth about a model nobody refreshed (BF-13525)
 
 * **`wsap_version` now pins the module FILE, not the platform's `bin` directory** (`703de23`). Reported off
@@ -792,7 +828,9 @@ Two findings the wave did not deliver, corrected here rather than left in the ch
 
 Not reproducible locally, delegated to the stacks that hold the fixtures: the `qa_run` BDD suite (no
 `qa-config.json`/`.feature` in the sandbox clone) and the `adopt_existing` orphan path (the two-index
-desync cannot be synthesised). Also recorded: in auto mode `candidates_tried` lists only the installations
+desync cannot be synthesised). **Correction (2026-08-10, Round-15): the orphan path claim was wrong — the
+desync IS synthesisable on the sandbox and the path is now live-validated there. The recipe follows from
+the index-B rule stated two paragraphs above. Only the `qa_run` BDD fixture gap still stands.** Also recorded: in auto mode `candidates_tried` lists only the installations
 actually tried, so "rejected" and "never enumerated" stay indistinguishable — on this box `8.5.1.1302` is
 installed, auto picked `8.3.27.2074` and tried nothing else, while an explicit `runtime_version=8.5.1`
 resolves it, which points the pre-release autoselect reports at a project pin or EDT's preferred runtime
