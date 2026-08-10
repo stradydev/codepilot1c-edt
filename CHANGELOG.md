@@ -101,6 +101,34 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-24 (2026-08-10) — BF-11156's three discovery gaps: two fixed, the third already had a tool
+
+* **`include_check_help=true` stopped omitting rules it has no description for.** A check whose
+  contributing bundle ships no HTML help was dropped silently, to save tokens on empty entries — so
+  `bsl-legacy-check-type-in-operator-new` firing on correct modern code produced no help and no statement
+  that none exists, which reads as "nothing to know here". Reported twice independently (BF-11156,
+  BF-7805). The unresolved ids are now named in a single trailing entry that says the absence is the
+  answer and not a failed lookup, so the honesty costs one line rather than one entry per rule.
+* **A collapsed group no longer hides the text the caller came for.** The sample cap was a flat three
+  messages, and for `form-event-regions` the elided variant was the exact required region name — a
+  re-query of a single line just to read a name the first answer already had. The cap is now on
+  characters, not variants: short messages all fit, long ones still stop at three. By construction the
+  sample block cannot exceed what the flat cap already allowed (3 × 160 chars), so the scan-volume work
+  of Round-16/18 is not regressed; a test pins that bound across message lengths.
+* **The third ask — a new `metadata_exists`/`enum_members` helper — was refuted by one live call.**
+  `edt_metadata_details` already answers existence explicitly (`exists:false` with a message that
+  distinguishes "kind searched, name absent" from an unknown kind), and with `full=true` it lists an
+  Enum's values among the object's children. Nothing was missing but the knowledge that `full` is the
+  flag that reveals containment — and the tool's own description worked against learning it, promising
+  "properties, children, forms, and modules" unconditionally when children in fact need `full=true`.
+  Fixed there instead: the description now names the flag and the existence answer. The probe is in
+  `issues/2026-08-10-bf11156-discovery-gaps-probe-findings.md`, including the trap that `exists:false`
+  arrives on the success channel.
+* Both rules live in core (`CheckHelpDetails`, `DiagnosticGroupSamples`) because the collector that
+  renders them is in the UI bundle, which has no test runtime; the collector delegates, which the
+  compiler enforces. Tests: 8/8 and 9/9. Untouched: the `bsl-legacy-*` → BSL-LS key mapping the same
+  note asks for as the second half of item 1 — a research task, not a formatting one.
+
 ### Round-23 (2026-08-10) — `edt_validate_request` stops issuing tokens for operations this endpoint cannot execute
 
 * **A green light for an unreachable operation.** `ensure_module_artifact` validated to `valid:true` and

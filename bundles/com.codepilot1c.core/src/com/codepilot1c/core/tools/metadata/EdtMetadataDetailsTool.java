@@ -32,7 +32,7 @@ public class EdtMetadataDetailsTool extends AbstractTool {
                   "items": {"type": "string"},
                   "description": "Metadata object FQNs to inspect semantically through EDT, not raw file paths. Only the leading <Type>.<Name> pair is resolved here, so pass a nested subsystem as the flat Subsystem.<Name> — its paired storage chain Subsystem.<Parent>.Subsystem.<Name> works in the mutating tools but not in this one."
                 },
-                "full": {"type": "boolean", "description": "Request extended semantic details for the selected metadata objects."},
+                "full": {"type": "boolean", "description": "Adds the object's children — attributes, tabular sections, standard attributes, Enum values. Pass it whenever you need what an object CONTAINS; without it only the object's own properties are rendered."},
                 "language": {"type": "string", "description": "Preferred language code for rendered details."}
               },
               "required": ["projectName", "objectFqns"]
@@ -43,7 +43,7 @@ public class EdtMetadataDetailsTool extends AbstractTool {
 
     @Override
     public String getDescription() {
-        return "Reads structured details of an EDT metadata object: properties, children, forms, and modules."; //$NON-NLS-1$
+        return "Reads structured details of an EDT metadata object: properties, forms, modules, and — with full=true — its children (attributes, tabular sections, Enum values). Also answers whether an FQN exists at all, so it beats globbing the configuration for a one-line existence check."; //$NON-NLS-1$
     }
 
     @Override

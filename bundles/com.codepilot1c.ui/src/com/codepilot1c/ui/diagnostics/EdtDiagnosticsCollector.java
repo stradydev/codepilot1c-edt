@@ -69,7 +69,9 @@ import com.codepilot1c.core.diagnostics.BslLiveValidator;
 import com.codepilot1c.core.diagnostics.BslLiveValidator.BslLiveIssue;
 import com.codepilot1c.core.diagnostics.DcsSchemaValidator;
 import com.codepilot1c.core.diagnostics.DcsSchemaValidator.DcsSchemaIssue;
+import com.codepilot1c.core.diagnostics.CheckHelpDetails;
 import com.codepilot1c.core.diagnostics.CheckInfoResolver;
+import com.codepilot1c.core.diagnostics.DiagnosticGroupSamples;
 import com.codepilot1c.core.diagnostics.DiagnosticOrigin;
 import com.codepilot1c.core.diagnostics.DiagnosticOriginSelection;
 import com.codepilot1c.core.diagnostics.DiagnosticPathFilter;
@@ -386,9 +388,6 @@ public class EdtDiagnosticsCollector {
             sb.append("\n"); //$NON-NLS-1$
         }
 
-        /** Caps the representative-message sample shown for a collapsed group. */
-        private static final int GROUP_SAMPLE_MAX = 160;
-
         /**
          * Renders a collapsed group of same-rule diagnostics:
          * <pre>- &lt;rule&gt; ×N — lines: 41(×2), 3376, 3917
@@ -437,53 +436,48 @@ public class EdtDiagnosticsCollector {
                 }
             }
 
-            // Up to 3 distinct sample messages, so the variety of a parametrized
-            // rule (different names/identifiers) is visible without expanding.
-            // Messages are already trimmed/whitespace-collapsed at construction.
-            LinkedHashSet<String> distinct = new LinkedHashSet<>();
+            // Distinct sample messages, so the variety of a parametrized rule
+            // (different names/identifiers, required region names) is visible
+            // without expanding. The cap is on characters rather than on variants,
+            // so short messages all fit — eliding them was what forced a re-query
+            // for the exact region name. Messages are already trimmed and
+            // whitespace-collapsed at construction; the rule is in core.
+            List<String> messages = new ArrayList<>();
             for (EdtDiagnostic d : group) {
-                String m = d.message();
-                if (m != null && !m.isBlank()) {
-                    distinct.add(m);
-                }
+                messages.add(d.message());
             }
-            int shown = 0;
-            for (String m : distinct) {
-                if (shown >= 3) {
-                    break;
-                }
-                String sample = m.length() > GROUP_SAMPLE_MAX
-                        ? m.substring(0, GROUP_SAMPLE_MAX - 1) + "…" //$NON-NLS-1$
-                        : m;
+            DiagnosticGroupSamples.Selection samples = DiagnosticGroupSamples.select(messages);
+            for (String sample : samples.shown()) {
                 sb.append("\n    ").append(sample); //$NON-NLS-1$
-                shown++;
             }
-            if (distinct.size() > 3) {
-                sb.append("\n    (+").append(distinct.size() - 3).append(" more variants)"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (samples.hidden() > 0) {
+                sb.append("\n    (+").append(samples.hidden()).append(" more variants)"); //$NON-NLS-1$ //$NON-NLS-2$
             }
             return sb.toString();
         }
     }
 
     /**
-     * Builds a deduplicated {@link CheckDetail} list for the diagnostics. Only
-     * checks whose contributor bundle actually ships an HTML description make
-     * it into the list — others are silently omitted so callers don't pay
-     * tokens for empty entries.
+     * Builds a deduplicated {@link CheckDetail} list for the diagnostics. Checks
+     * whose contributor bundle ships no HTML description used to be dropped
+     * without a word; they are now named in one trailing aggregate entry, so an
+     * absent description is distinguishable from a rule nobody looked up while
+     * still costing the caller a single line. The rule itself lives in
+     * {@link CheckHelpDetails} (core) because this bundle has no test runtime.
      */
     static List<CheckDetail> buildCheckDetails(List<EdtDiagnostic> diagnostics, String locale) {
         if (diagnostics == null || diagnostics.isEmpty()) {
             return List.of();
         }
         CheckInfoResolver resolver = CheckInfoResolver.getInstance();
-        LinkedHashSet<String> seenIds = new LinkedHashSet<>();
-        List<CheckDetail> details = new ArrayList<>();
+        List<String> checkIds = new ArrayList<>();
         for (EdtDiagnostic d : diagnostics) {
-            String id = d.checkId();
-            if (id == null || id.isBlank() || !seenIds.add(id)) {
-                continue;
-            }
-            resolver.findMarkdown(id, locale).ifPresent(md -> details.add(new CheckDetail(id, md)));
+            checkIds.add(d.checkId());
+        }
+        List<CheckDetail> details = new ArrayList<>();
+        for (CheckHelpDetails.Entry entry : CheckHelpDetails.build(
+                checkIds, id -> resolver.findMarkdown(id, locale))) {
+            details.add(new CheckDetail(entry.checkId(), entry.markdown()));
         }
         return List.copyOf(details);
     }
