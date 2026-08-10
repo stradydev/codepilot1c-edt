@@ -101,6 +101,50 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-17 (2026-08-10) — `delete_metadata`: the non-`force` top-level delete was unreachable, and the report that turned out to be my own reading mistake
+
+* **A top-level object could never be deleted without `force=true`.** The gate read
+  `if (!topLevelDelete && references.total() == 0) return;` — it returned early only for CHILD deletes,
+  so a top-level delete threw `METADATA_DELETE_CONFLICT` whatever the reference count. Proven live on
+  the sandbox (build `0.1.7.20260810-0712`, `TestConfiguration`) with the cheapest possible case: a
+  brand-new `SessionParameter` created through the normal `create_metadata` path — no module, no
+  children, no user of any kind — refused with exactly ONE cited reference,
+  `Configuration#sessionParameters`, its own entry in the configuration composition. A `CommonModule`
+  behaved the same and additionally cited `CommonModule.<Name>#source`, its own module. Since every
+  top-level object is listed in `Configuration#<collection>` by construction, no amount of cleaning
+  could reach the cure the message advertised (*«Сначала очистите ссылки… затем повторите удаление»*),
+  which left `force=true` as the only way through and taught callers to pass the override reflexively —
+  the opposite of what a guard is for.
+* **`DeleteReferenceScope` (core, pure logic) drops the references that die with the object** before
+  counting: the object's own subtree (the referrer's top object IS the target) and its own composition
+  membership (`content` plus `TopLevelCollections.configurationTag(kind)` — one source of truth, reused,
+  not a second copy). The gate now lets the count decide for top-level objects too, and the refusal text
+  no longer claims a categorical policy is a reference condition.
+* **The filter names the composition feature instead of exempting the whole `Configuration`** — and that
+  distinction is the point. `Configuration#defaultRoles` pointing at a Role and `#defaultLanguage` at a
+  Language are real users that the delete does NOT clean up; waving them through would trade this bug
+  for dangling `.mdo` lines, the failure mode `removeSubsystemLinks` was written to prevent. Half the
+  test suite is that anti-regression half. Every uncertainty — unknown kind, blank feature name, a
+  feature that does not match the mapping — resolves to "this reference blocks", so a wrong mapping entry
+  can only restore the old over-strict behaviour, never permit a silent delete of a referenced object.
+* **The `recursive=true` refusal now names what it found** (`Found: feature(Type), feature×N`). A bare
+  `CommonModule` demands `recursive=true` because `hasNestedMetadataChildren` walks every containment
+  feature; a `SessionParameter` does not. Which intrinsic containment causes it was NOT established, so
+  it is deliberately not fixed blind — excluding the wrong one would let a real child be deleted without
+  `recursive`. The named refusal is the better message anyway and lets the next live `CommonModule`
+  delete identify the feature by itself, with no diagnostic-only build round.
+* **`get_diagnostics` answering about the wrong project *silently* on a misspelled selector: retracted,
+  no defect.** Filed by me in `issues/2026-08-10-sandbox-probe-findings.md` during Round-15. Re-probed on
+  `0712`: `projectName='TestConfiguration'` does answer about `/Accounting management`, but the response
+  carries the advisory note in full, naming the ignored key and suggesting `project_name`.
+  `AdvisoryToolWrapper` is applied by `ToolRegistry.register`, unchanged since `99f4db0`, so build `0639`
+  behaved identically. The note sits at the END of the report and I read only its head — the whole
+  response is ~15k characters. Third instance of a conclusion resting on the ABSENCE of an observation;
+  the issues file now records the retraction rather than being deleted.
+* Tests: `DeleteReferenceScopeTest` 20/20, by result over the function rather than by source text, with
+  both live samples asserted verbatim. Live validation of the delete path pending the next sandbox
+  redeploy.
+
 ### Round-16 (2026-08-10) — `get_diagnostics`: narrowing a project scan, and the one report that was already closed
 
 * **`path_contains` narrows a scan to named modules/areas** (`DiagnosticPathFilter` in core,

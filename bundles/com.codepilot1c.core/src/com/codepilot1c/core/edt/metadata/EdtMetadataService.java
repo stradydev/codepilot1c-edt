@@ -6948,10 +6948,14 @@ public class EdtMetadataService {
                         MetadataOperationCode.METADATA_NOT_FOUND,
                         "Metadata object not found: " + targetFqn, false); //$NON-NLS-1$
             }
-            if (!request.recursive() && hasNestedMetadataChildren(target)) {
-                throw new MetadataOperationException(
-                        MetadataOperationCode.METADATA_DELETE_CONFLICT,
-                        "Metadata object has nested children. Use recursive=true: " + targetFqn, false); //$NON-NLS-1$
+            if (!request.recursive()) {
+                List<String> nested = describeNestedMetadataChildren(target);
+                if (!nested.isEmpty()) {
+                    throw new MetadataOperationException(
+                            MetadataOperationCode.METADATA_DELETE_CONFLICT,
+                            "Metadata object has nested children. Use recursive=true: " + targetFqn //$NON-NLS-1$
+                                    + ". Found: " + String.join(", ", nested), false); //$NON-NLS-1$ //$NON-NLS-2$
+                }
             }
             storageFqnHolder[0] = topObjectStorageFqn(target);
             removeMetadataObject(txConfiguration, targetFqn, target, coEditedSink);
@@ -13819,6 +13823,22 @@ public class EdtMetadataService {
     }
 
     private boolean hasNestedMetadataChildren(MdObject target) {
+        return !describeNestedMetadataChildren(target).isEmpty();
+    }
+
+    /**
+     * Names the containment features that make {@code recursive=true} necessary, as
+     * {@code feature(type)} or {@code feature×N}.
+     *
+     * <p>The refusal used to say only "has nested children", which is unactionable: a caller who
+     * added nothing cannot tell WHAT it found. Observed live 2026-08-10 on a bare {@code CommonModule}
+     * created seconds earlier — it demanded {@code recursive=true} with no user-added child at all, so
+     * some intrinsic part of the object is being counted as one. Naming the features is both the
+     * better message and the cheapest way to identify that part on the next live run, without
+     * guessing at the EDT model here.</p>
+     */
+    private List<String> describeNestedMetadataChildren(MdObject target) {
+        List<String> found = new ArrayList<>();
         for (EStructuralFeature feature : target.eClass().getEAllStructuralFeatures()) {
             if (!(feature instanceof EReference reference) || !reference.isContainment()) {
                 continue;
@@ -13826,15 +13846,17 @@ public class EdtMetadataService {
             if (feature.isMany()) {
                 Object raw = target.eGet(feature);
                 if (raw instanceof Collection<?> collection && !collection.isEmpty()) {
-                    return true;
+                    found.add(feature.getName() + "×" + collection.size()); //$NON-NLS-1$
                 }
                 continue;
             }
-            if (target.eGet(feature) != null) {
-                return true;
+            Object value = target.eGet(feature);
+            if (value != null) {
+                found.add(feature.getName() + "(" //$NON-NLS-1$
+                        + (value instanceof EObject child ? child.eClass().getName() : "?") + ")"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        return false;
+        return found;
     }
 
     private void ensureNoIncomingReferences(
@@ -13847,19 +13869,19 @@ public class EdtMetadataService {
             return;
         }
         IncomingReferences references = collectIncomingReferences(project, configuration, targetFqn, 20);
-        boolean topLevelDelete = isTopLevelFqn(targetFqn);
-        if (!topLevelDelete && references.total() == 0) {
+        // A top-level delete used to throw here UNCONDITIONALLY — `!topLevelDelete && total == 0`
+        // returned only for children, so no top object could ever be deleted without force=true,
+        // and the message still advertised "clean the references, then repeat" as the cure. Proven
+        // live 2026-08-10: a brand-new SessionParameter with a single cited reference, its own
+        // Configuration#sessionParameters composition entry. The count now decides for both, and
+        // the references that die with the object are no longer counted — see DeleteReferenceScope.
+        if (references.total() == 0) {
             return;
         }
 
         StringBuilder message = new StringBuilder();
-        if (topLevelDelete) {
-            message.append("Удаление top-level объекта без рефакторинга отключено: ") //$NON-NLS-1$
-                    .append(targetFqn).append(". "); //$NON-NLS-1$
-        } else {
-            message.append("Обнаружены ссылки на удаляемый объект ").append(targetFqn) //$NON-NLS-1$
-                    .append(" (").append(references.total()).append("). "); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        message.append("Обнаружены ссылки на удаляемый объект ").append(targetFqn) //$NON-NLS-1$
+                .append(" (").append(references.total()).append("). "); //$NON-NLS-1$ //$NON-NLS-2$
         if (!references.samples().isEmpty()) {
             message.append("Найдены ссылки. Примеры: ") //$NON-NLS-1$
                     .append(String.join(", ", references.samples())).append(". "); //$NON-NLS-1$ //$NON-NLS-2$
@@ -13897,6 +13919,7 @@ public class EdtMetadataService {
 
             int total = 0;
             LinkedHashSet<String> samples = new LinkedHashSet<>();
+            MetadataKind targetKind = DeleteReferenceScope.kindOfFqn(targetFqn);
             for (IBmCrossReference reference : references) {
                 if (reference == null) {
                     continue;
@@ -13909,15 +13932,22 @@ public class EdtMetadataService {
                 if (source == null || source == targetObject) {
                     continue;
                 }
+                String sourceFqn = resolveTopObjectFqn(source);
+                String featureName = feature != null ? feature.getName() : "reference"; //$NON-NLS-1$
+                // References that die with the object itself are not users of it: the object's own
+                // subtree (its module's #source back-reference) and its own composition membership in
+                // Configuration, which removeTopLevelObjectLinks unregisters as part of this delete.
+                // Counting them made every non-force top-level delete impossible.
+                if (!DeleteReferenceScope.blocksDelete(targetFqn, targetKind, sourceFqn, featureName)) {
+                    continue;
+                }
                 total++;
                 if (samples.size() >= sampleLimit) {
                     continue;
                 }
-                String sourceFqn = resolveTopObjectFqn(source);
                 if (sourceFqn.isBlank()) {
                     sourceFqn = source.eClass().getName();
                 }
-                String featureName = feature != null ? feature.getName() : "reference"; //$NON-NLS-1$
                 samples.add(sourceFqn + "#" + featureName); //$NON-NLS-1$
             }
             return new IncomingReferences(total, List.copyOf(samples));
