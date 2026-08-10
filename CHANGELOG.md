@@ -62,6 +62,35 @@ another turned out to be a different defect than the one reported.
   regression on plain code search: `MessageToUser` still returns 50 `.bsl` hits (the cap), i.e. the wider
   corpus does not crowd out code matches.
 
+### Round-14 (2026-08-10) — `yaxunit_run`: a zero-test run blamed the infobase for something the filter had done (Q90)
+
+* **`classifyZeroTests` checked the equality state before the filter, so `NOT_EQUAL` always won.** Rerouted
+  from `infra-fleet-tooling` as "`yaxunit_warmup`/`yaxunit_run` hard-gate on `equality_state==EQUAL`". Two
+  corrections from the code: there is no `yaxunit_warmup` tool — the word does not occur in this repository,
+  it is a step of the infra rail (`scripts/setup/Provision-Task.ps1`, `Step-YaxunitWarmup`) that calls
+  `yaxunit_run`; and `yaxunit_run` never gated the run at all — it executes under any state, a stale one only
+  adds a `preflight_warnings` line. The state decided exactly one thing: how a run that executed **zero**
+  tests was explained.
+* **That is what broke provisioning.** The warm-up step passes a deliberately nonexistent module
+  (`__InfraWarmupProbe__`) and accepts `reason=filter_matched_nothing` as its proof that the thin client
+  resolved, connected and ran — the filter is BSL-side discovery, so a zero match is the expected clean
+  answer. With `NOT_EQUAL` the tool answered `infobase_stale` instead, the step saw an unrecognized reason,
+  and the pipeline stopped on its first failure.
+* **The ordering was wrong on its own terms, not merely inconvenient for that consumer.** A non-EQUAL state
+  does not prove the infobase lacks the tests: an exclusive apply that reported `schema_applied:true` with no
+  `dynamic_only` leaves EDT's comparison on `NOT_EQUAL` with live code — `EdtUpdateInfobaseTool` and
+  `get_infobase_sync_state` both already warn about this and tell callers not to loop. So `infobase_stale`
+  was a guess presented as the cause, and its remediation ("run update_infobase, then retry") cannot
+  converge. The reason now names what was *observed* — a filter was passed and selected nothing — while the
+  stale hypothesis stays in the message, in `equality_state` and in `preflight_warnings`, with the
+  non-convergence case spelled out. No change is required on the infra side.
+* **Not done, and why:** the tool cannot consume `schema_applied` by itself. That field exists only in
+  `update_infobase`'s JSON answer and nothing persists it, so "read the same signal" is unimplementable
+  without new state; an explicit "this NOT_EQUAL is known-cosmetic" assertion would want a parameter.
+* Reproduced live before the fix (sandbox, `Accounting management` on `File_am_sandbox`, genuinely
+  `NOT_EQUAL`): the synthetic-filter run came back `status=no_tests_matched`, `reason=infobase_stale` — the
+  exact pair the infra step rejects. Tests: `YaxunitRunToolTest` 20/20, the stale-blame case rewritten.
+
 ### Round-12 (2026-08-04) — `web_publication`: the wsap pin and the publication list both told the truth about a model nobody refreshed (BF-13525)
 
 * **`wsap_version` now pins the module FILE, not the platform's `bin` directory** (`703de23`). Reported off
