@@ -145,9 +145,18 @@ public record RightsManageRequest(
      *
      * <p>Field-level RLS ({@code Rls.fields}) is NOT supported here and a {@code fields} key is
      * REFUSED rather than dropped: a silently ignored key reads to the caller as an applied
-     * per-field restriction that was in fact written as a whole-object one.</p>
+     * per-field restriction that was in fact written as a whole-object one. The key is refused in
+     * <em>both</em> spellings — nested in a restriction entry
+     * ({@code restriction: [{condition, fields}]}) and as a sibling of {@code restriction} on the
+     * grant itself ({@code {object_fqn, right, fields, restriction}}), which is the spelling a
+     * caller reaches for first. Only the nested one was covered originally, so the grant-level key
+     * passed validation and was dropped during normalization — after which the token carried no
+     * trace of it and no later stage could refuse it (live, 2026-08-10).</p>
      */
     private static List<String> parseRestrictions(Map<?, ?> entry, String objectFqn, String right) {
+        // Checked before the early return below on purpose: 'fields' with no 'restriction' at all
+        // still reads as an applied per-field grant, and must not pass either.
+        refuseFieldLevelRls(entry, objectFqn, right);
         Object raw = firstValue(entry, "restriction", "restrictions", "rls", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "condition", "conditions", "restriction_by_condition", "restrictionsByCondition"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         if (raw == null) {
@@ -186,15 +195,21 @@ public record RightsManageRequest(
         return List.copyOf(conditions);
     }
 
-    private static String restrictionFromMap(Map<?, ?> map, String objectFqn, String right) {
-        if (firstValue(map, "fields", "field") != null) { //$NON-NLS-1$ //$NON-NLS-2$
-            throw new MetadataOperationException(
-                    MetadataOperationCode.INVALID_METADATA_CHANGE,
-                    "Field-level RLS is not supported for " + right + " on " + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
-                            + ": a restriction here always applies to the whole object." //$NON-NLS-1$
-                            + " Drop the 'fields' key, or edit the .rights file directly for a" //$NON-NLS-1$
-                            + " per-field condition.", false); //$NON-NLS-1$
+    /** Refuses a {@code fields}/{@code field} key wherever it appears — see {@link #parseRestrictions}. */
+    private static void refuseFieldLevelRls(Map<?, ?> map, String objectFqn, String right) {
+        if (firstValue(map, "fields", "field") == null) { //$NON-NLS-1$ //$NON-NLS-2$
+            return;
         }
+        throw new MetadataOperationException(
+                MetadataOperationCode.INVALID_METADATA_CHANGE,
+                "Field-level RLS is not supported for " + right + " on " + objectFqn //$NON-NLS-1$ //$NON-NLS-2$
+                        + ": a restriction here always applies to the whole object." //$NON-NLS-1$
+                        + " Drop the 'fields' key, or edit the .rights file directly for a" //$NON-NLS-1$
+                        + " per-field condition.", false); //$NON-NLS-1$
+    }
+
+    private static String restrictionFromMap(Map<?, ?> map, String objectFqn, String right) {
+        refuseFieldLevelRls(map, objectFqn, right);
         String condition = trimmed(firstValue(map, "condition", "text", "value", "restriction")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         if (condition == null || condition.isBlank()) {
             throw new MetadataOperationException(

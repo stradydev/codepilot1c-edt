@@ -41,8 +41,47 @@ as what was actually observed rather than as a pass/fail tally:
   30 s OSGi wait that can never succeed, paid once per delegate call. The claim recorded here that the
   underlying `bsl_module_context` was "instant on the same file" was **a mismeasurement** — timed
   properly it takes exactly 30 s, which is precisely the defect.
-* **Still pending:** baseline save/diff (Round-18), the endpoint gate (Round-23), the check-help
-  rendering (Round-24) and the new RLS write (Round-26).
+* **CONFIRMED — baseline save/diff (Round-18)**, all three steps on `TestConfiguration`: `save` wrote
+  `<workspace>/.codepilot/diagnostics-baseline/TestConfiguration.txt` and reported 27 recorded; an
+  immediate `diff` returned 0 with "27 pre-existing not shown"; a deliberately introduced error made
+  `diff` report **only** the 3 items that edit caused, the 27 still hidden.
+* **CONFIRMED — check-help rendering (Round-24).** Rules with bundled help got their full description;
+  `md-legacy-emf-check`, which ships none, was **named** in one summary entry that also says another
+  locale will not help — not silently omitted. The collapsed `×3` group kept its short variant
+  visible. The parameter's own description still promised the old "silently omitted" behaviour and has
+  been corrected.
+* **CONFIRMED — the RLS write (Round-26)**, end to end on `Role.AddEditAlertsTypes` in the AM sandbox:
+  the condition landed inside the `Read` grant as `<restrictionByCondition><condition>`; re-sending the
+  identical request reported "nothing was written … 1 restriction condition(s) — unchanged" rather
+  than appending a second one; `restriction: []` erased it and the file came back **byte-identical**
+  to its pre-test SHA-256 (so the EOL/formatting preservation held too, and the sandbox is clean);
+  `value:remove` + `restriction` was refused at validate time with an actionable message.
+* **GAP FOUND in Round-26 and fixed — see Round-28.** `fields` was refused only when nested inside a
+  restriction entry. As a sibling of `restriction` on the grant — the spelling a caller reaches for
+  first — it validated `valid:true` and was dropped during normalization.
+* **FOUND, filed, not fixed — `get_diagnostics` double-counts.** One BSL error yields "2 errors" with
+  default settings: the workspace-attached and runtime marker sources each report it and their dedup
+  keys cannot collide. `issues/2026-08-10-get-diagnostics-double-counts-across-marker-sources.md`.
+  Recorded counts from unfiltered scans — including the "3 errors" above — should be re-read with this
+  in mind.
+* **Still pending:** the endpoint gate (Round-23). It is testable now: `ensure_module_artifact` sits in
+  the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
+  (`full`) should still issue a token.
+
+### Round-28 (2026-08-10) — `rights_manage`: refuse a grant-level `fields`, do not drop it
+
+Round-26 promised that a `fields` key is refused rather than ignored, because a silently dropped one
+reads to the caller as a per-field RLS that was in fact written whole-object. Live testing showed the
+promise held for `restriction: [{condition, fields}]` and **not** for `{object_fqn, right, fields,
+restriction}` — the flat spelling a caller writes first. That one validated `valid:true`, and
+normalization stripped the key, after which the token carried no trace of it and no later stage could
+refuse it. The mirror image of the token trap Round-26 itself fixed.
+
+The refusal moved into a shared `refuseFieldLevelRls` called from both spellings, and from
+`parseRestrictions` *before* its early return — so `fields` with no `restriction` at all is refused
+too. Because `edt_validate_request` normalizes through the same `parseGrants`, one guard covers both
+stages. `RightsManageRestrictionTest` 21/21 (three new, one of them asserting the refusal fires at the
+validate stage rather than only in the mutator).
 
 ### Round-27 (2026-08-10) — stop waiting 30 s for a service that is not an OSGi service
 

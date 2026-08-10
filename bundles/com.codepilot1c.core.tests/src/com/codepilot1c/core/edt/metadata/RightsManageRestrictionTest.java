@@ -112,6 +112,37 @@ public class RightsManageRestrictionTest {
     }
 
     @Test
+    public void grantLevelFieldsKeyIsRefusedAlongsideARestriction() {
+        // The spelling a caller reaches for first: 'fields' as a SIBLING of 'restriction', not
+        // nested inside it. Live on 2026-08-10 this passed validation with valid:true and the key
+        // was dropped during normalization — after which the token carried no trace of it and no
+        // later stage could refuse it. Same wrong-grant-reported-as-success as the nested form.
+        Map<String, Object> grant = grant("set", "restriction", CONDITION); //$NON-NLS-1$ //$NON-NLS-2$
+        grant.put("fields", List.of("Catalog.Contracts.Sum")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertRejected(List.of(grant));
+    }
+
+    @Test
+    public void grantLevelFieldsKeyIsRefusedEvenWithNoRestrictionAtAll() {
+        // 'fields' on its own still reads as an applied per-field grant, so it cannot pass either.
+        assertRejected(List.of(grant("set", "fields", List.of("Catalog.Contracts.Sum")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void validationRefusesAGrantLevelFieldsKeyBeforeItCanBeDropped() {
+        // The refusal has to bite at the VALIDATE stage: that is the one that was issuing a token.
+        Map<String, Object> grant = grant("set", "restriction", CONDITION); //$NON-NLS-1$ //$NON-NLS-2$
+        grant.put("fields", List.of("Catalog.Contracts.Sum")); //$NON-NLS-1$ //$NON-NLS-2$
+        try {
+            service.normalizeRightsManagePayload("P", "Role.R", List.of(grant)); //$NON-NLS-1$ //$NON-NLS-2$
+            fail("edt_validate_request must refuse a grant-level 'fields', not issue a token for a" //$NON-NLS-1$
+                    + " payload it is about to strip"); //$NON-NLS-1$
+        } catch (MetadataOperationException expected) {
+            // expected
+        }
+    }
+
+    @Test
     public void blankConditionInsideAListIsRefused() {
         assertRejected(List.of(grant("set", "restriction", java.util.Arrays.asList("A", "  ")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
