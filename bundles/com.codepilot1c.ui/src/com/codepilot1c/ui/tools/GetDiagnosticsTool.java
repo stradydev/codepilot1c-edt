@@ -76,6 +76,10 @@ public class GetDiagnosticsTool implements ITool {
                         "type": "boolean",
                         "description": "Include diagnostics from the EDT runtime marker manager (project-wide validation results: metadata/object checks). Default true — keep it on for scope=project to get the full picture. Set false to restrict to workspace-attached markers only (rarely needed). Note: for scope=file on an OPEN module the live diagnostics come from the editor's annotations, so toggling this has little visible effect there; it mainly matters for scope=project."
                     },
+                    "path_contains": {
+                        "type": "string",
+                        "description": "Narrow a scan to named areas: keep only diagnostics whose file path OR object name contains one of these substrings (case-insensitive, comma-separated, either slash accepted). USE THIS on scope=project instead of paging a whole configuration — 'CommonModules/MyModule' or 'MyModule,MySecondModule' answers 'does anything of mine show an error' without the thousands of pre-existing ones. Applied before max_items, so the limit cuts your narrowed set, not the project. Items that carry neither a path nor an object name are dropped when you narrow (they cannot be shown to belong to the area you named)."
+                    },
                     "line_from": {
                         "type": "integer",
                         "description": "Lower bound of the line range (1-based, inclusive). 0 = no limit. USE this together with line_to when editing/inspecting a specific method or fragment: only diagnostics within the range are returned, which sharply shrinks the response on large modules (with hundreds of warnings). Example: editing a function on lines 40-75 -> line_from=40, line_to=75."
@@ -113,7 +117,9 @@ public class GetDiagnosticsTool implements ITool {
     @Override
     public String getDescription() {
         return "Live EDT diagnostics (errors/warnings) for a project, file, or active editor; grouped by rule, each tagged " //$NON-NLS-1$
-                + "with its v8-code-style rule code. Options: line_from/line_to to focus on a method and cut tokens on big " //$NON-NLS-1$
+                + "with its v8-code-style rule code. Options: path_contains to narrow a project scan to named modules/areas " //$NON-NLS-1$
+                + "(the cheap way to ask 'did anything of MINE break' on a large config); line_from/line_to to focus on a " //$NON-NLS-1$
+                + "method and cut tokens on big " //$NON-NLS-1$
                 + "modules; severity/max_items to filter; include_check_help=true to append the official rule explanation+fix " //$NON-NLS-1$
                 + "(use when you intend to FIX); include_runtime_markers (project-wide checks). " //$NON-NLS-1$
                 + "Only real EDT diagnostics are returned by default: review/comment annotations contributed by other " //$NON-NLS-1$
@@ -161,6 +167,9 @@ public class GetDiagnosticsTool implements ITool {
         // DiagnosticOrigin.
         String originFilter = (String) parameters.getOrDefault(
                 "origin", DiagnosticOrigin.defaultFilter()); //$NON-NLS-1$
+        // Narrowing by file path / object name. Honored on every scope and applied inside the
+        // collector BEFORE the max_items cut — see EdtDiagnosticsCollector.applyPathFilter.
+        String pathContains = (String) parameters.get("path_contains"); //$NON-NLS-1$
 
         // Validate parameters
         if (maxItems < 0) maxItems = 0;
@@ -175,7 +184,7 @@ public class GetDiagnosticsTool implements ITool {
 
         DiagnosticsQuery query = new DiagnosticsQuery(
                 minSeverity, maxItems, true, waitMs, includeRuntimeMarkers, lineFrom, lineTo,
-                includeCheckHelp, helpLocale, originFilter);
+                includeCheckHelp, helpLocale, originFilter, pathContains);
         EdtDiagnosticsCollector collector = EdtDiagnosticsCollector.getInstance();
 
         String normalizedScope = normalizeScope(scope, path, projectName);

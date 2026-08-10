@@ -72,6 +72,7 @@ import com.codepilot1c.core.diagnostics.DcsSchemaValidator.DcsSchemaIssue;
 import com.codepilot1c.core.diagnostics.CheckInfoResolver;
 import com.codepilot1c.core.diagnostics.DiagnosticOrigin;
 import com.codepilot1c.core.diagnostics.DiagnosticOriginSelection;
+import com.codepilot1c.core.diagnostics.DiagnosticPathFilter;
 import com.codepilot1c.core.diagnostics.DiagnosticsLineFilter;
 import com.codepilot1c.core.diagnostics.PathMatchTokens;
 import com.codepilot1c.core.diagnostics.RelativePathCandidates;
@@ -162,16 +163,29 @@ public class EdtDiagnosticsCollector {
             int lineTo,
             boolean includeCheckHelp,
             String helpLocale,
-            String originFilter) {
+            String originFilter,
+            String pathContains) {
 
         public static DiagnosticsQuery defaults() {
             return new DiagnosticsQuery(Severity.INFO, 0, true, 0, true, 0, 0, false, "en", //$NON-NLS-1$
-                    DiagnosticOrigin.defaultFilter());
+                    DiagnosticOrigin.defaultFilter(), null);
         }
 
         public static DiagnosticsQuery withSeverity(Severity minSeverity) {
             return new DiagnosticsQuery(minSeverity, 0, true, 0, true, 0, 0, false, "en", //$NON-NLS-1$
-                    DiagnosticOrigin.defaultFilter());
+                    DiagnosticOrigin.defaultFilter(), null);
+        }
+
+        /**
+         * Backwards-compatible constructor for callers that predate the {@code pathContains} field —
+         * they get no narrowing, which is the historical behaviour.
+         */
+        public DiagnosticsQuery(
+                Severity minSeverity, int maxItems, boolean includeSnippets, long waitMs,
+                boolean includeRuntimeMarkers, int lineFrom, int lineTo,
+                boolean includeCheckHelp, String helpLocale, String originFilter) {
+            this(minSeverity, maxItems, includeSnippets, waitMs, includeRuntimeMarkers,
+                    lineFrom, lineTo, includeCheckHelp, helpLocale, originFilter, null);
         }
 
         /**
@@ -182,7 +196,7 @@ public class EdtDiagnosticsCollector {
                 Severity minSeverity, int maxItems, boolean includeSnippets, long waitMs,
                 boolean includeRuntimeMarkers, int lineFrom, int lineTo) {
             this(minSeverity, maxItems, includeSnippets, waitMs, includeRuntimeMarkers,
-                    lineFrom, lineTo, false, "en", DiagnosticOrigin.defaultFilter()); //$NON-NLS-1$
+                    lineFrom, lineTo, false, "en", DiagnosticOrigin.defaultFilter(), null); //$NON-NLS-1$
         }
 
         /**
@@ -195,7 +209,8 @@ public class EdtDiagnosticsCollector {
                 boolean includeRuntimeMarkers, int lineFrom, int lineTo,
                 boolean includeCheckHelp, String helpLocale) {
             this(minSeverity, maxItems, includeSnippets, waitMs, includeRuntimeMarkers,
-                    lineFrom, lineTo, includeCheckHelp, helpLocale, DiagnosticOrigin.defaultFilter());
+                    lineFrom, lineTo, includeCheckHelp, helpLocale,
+                    DiagnosticOrigin.defaultFilter(), null);
         }
     }
 
@@ -539,6 +554,7 @@ public class EdtDiagnosticsCollector {
                     // filter by line range (no-op when lineFrom=lineTo=0), then limit
                     diagnostics = applyOriginFilter(diagnostics, q);
                     diagnostics = applyLineFilter(diagnostics, q);
+                    diagnostics = applyPathFilter(diagnostics, q);
                     diagnostics = applyResultLimit(diagnostics, q.maxItems());
 
                     // Count by severity (review overlays excluded)
@@ -606,6 +622,7 @@ public class EdtDiagnosticsCollector {
 
                 diagnostics = applyOriginFilter(diagnostics, query);
                 diagnostics = applyLineFilter(diagnostics, query);
+                diagnostics = applyPathFilter(diagnostics, query);
                 diagnostics = applyResultLimit(diagnostics, query.maxItems());
 
                 int[] counts = countBySeverity(diagnostics);
@@ -1001,6 +1018,35 @@ public class EdtDiagnosticsCollector {
     }
 
     /**
+     * Narrows the result to the file paths / object names the caller named in {@code path_contains}.
+     *
+     * <p>Sits BEFORE {@link #applyResultLimit} at every call site, and that ordering is the whole
+     * point: applying it after the limit would filter a set that had already been truncated to
+     * {@code max_items}, so a caller asking about one module inside a 6000-error project would get
+     * whatever survived the cut rather than that module's diagnostics. The severity gate was wrong in
+     * exactly this way once ({@code 5a851a7}) — the limit is the last step, never an early one.</p>
+     *
+     * <p>The predicate itself lives in {@link DiagnosticPathFilter} (core, unit-tested) because this
+     * bundle has no test runtime.</p>
+     */
+    private List<EdtDiagnostic> applyPathFilter(List<EdtDiagnostic> diagnostics, DiagnosticsQuery query) {
+        if (diagnostics == null || diagnostics.isEmpty() || query == null) {
+            return diagnostics;
+        }
+        List<String> needles = DiagnosticPathFilter.parse(query.pathContains());
+        if (DiagnosticPathFilter.isDisabled(needles)) {
+            return diagnostics;
+        }
+        List<EdtDiagnostic> filtered = new ArrayList<>(diagnostics.size());
+        for (EdtDiagnostic d : diagnostics) {
+            if (DiagnosticPathFilter.matches(d.filePath(), d.objectPresentation(), needles)) {
+                filtered.add(d);
+            }
+        }
+        return filtered;
+    }
+
+    /**
      * Drops diagnostics whose provenance the caller did not ask for. Applied
      * centrally (every scope) so the origin contract holds no matter which
      * collection path produced the entry — marker-based paths additionally skip
@@ -1085,6 +1131,7 @@ public class EdtDiagnosticsCollector {
 
                 diagnostics = applyOriginFilter(diagnostics, query);
                 diagnostics = applyLineFilter(diagnostics, query);
+                diagnostics = applyPathFilter(diagnostics, query);
                 diagnostics = applyResultLimit(diagnostics, query.maxItems());
 
                 int[] counts = countBySeverity(diagnostics);
@@ -1145,6 +1192,7 @@ public class EdtDiagnosticsCollector {
 
                 diagnostics = applyOriginFilter(diagnostics, query);
                 diagnostics = applyLineFilter(diagnostics, query);
+                diagnostics = applyPathFilter(diagnostics, query);
                 diagnostics = applyResultLimit(diagnostics, query.maxItems());
 
                 int[] counts = countBySeverity(diagnostics);

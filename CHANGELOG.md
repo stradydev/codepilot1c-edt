@@ -101,6 +101,37 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-16 (2026-08-10) — `get_diagnostics`: narrowing a project scan, and the one report that was already closed
+
+* **`path_contains` narrows a scan to named modules/areas** (`DiagnosticPathFilter` in core,
+  `EdtDiagnosticsCollector.applyPathFilter`). Two feedback notes asked for the same thing from different
+  sessions: a project-wide `severity=error max_items=0` returned ~6.7k baseline errors just to confirm
+  "nothing new mentions my objects". Comma-separated, case-insensitive, either slash accepted, matched
+  against the file path **or** the object presentation — the latter matters because runtime-marker items,
+  which are the bulk of a project scan, frequently carry no file path at all and name their subject only
+  as e.g. `CommonModule.Error.Module`; filtering on the path alone would drop exactly what the feature
+  exists to find. An item carrying neither coordinate is dropped when narrowing is requested, because it
+  cannot be shown to belong to the named area.
+* **Placed before the `max_items` cut, at all four collection sites.** Filtering after the limit would
+  narrow a set that had already been truncated, so a question about one module in a 6000-error project
+  would return whatever survived the cut. The severity gate was wrong in exactly this way until
+  `5a851a7`; the limit is now consistently the last step.
+* **The baseline-diff rule is implemented and unit-tested in core (`DiagnosticBaseline`), not yet wired
+  into the tool.** The fingerprint deliberately excludes the line number and carries multiplicity
+  instead — including the line would report a module's whole tail as "new" after one inserted procedure.
+  The documented cost: the diff answers "are there more of these than before", not "is this the same
+  one". An unknown `baseline` mode resolves to `off`, never to `diff`, so a typo cannot silently hide
+  diagnostics.
+* **`get_diagnostics scope=file path=… severity=error` returning project-wide results: already fixed, not
+  reproducible.** Reported in the same batch (BF-12338 item 1). Probed live on build
+  `0.1.7.20260810-0712` before touching anything: on a file with 8 errors in a project with 16, the call
+  returns 8 and the header names the file. `severity=error` and `severity=info` agree where the file has
+  no warnings and differ where it does. This was a consequence of the `severity=error` no-op regression
+  closed by `5a851a7` — whose own javadoc already records that callers read that bug as "scope=file
+  leaked project-wide results". No code change.
+* Tests: `DiagnosticPathFilterTest` 8/8, `DiagnosticBaselineTest` 11/11, both by result rather than by
+  source text. Live validation of `path_contains` pending the next sandbox redeploy.
+
 ### Round-15 (2026-08-10) — `create_metadata adopt_existing`: the orphan path was live-validated on the sandbox after all (BF-13405)
 
 * **Status: LIVE-VALIDATED 2026-08-10**, sandbox EDT (`workspace-sandbox`, build `0.1.7.20260810-0639`,
