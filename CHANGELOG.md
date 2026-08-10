@@ -51,10 +51,16 @@ another turned out to be a different defect than the one reported.
 * Tests: `DiagnosticSeverityFilterTest` (6), `GrepFileFilterTest` (10), `MetadataDetailsFqnRejectionTest`
   (7, four of them new — the two that pinned the old terse wording were rewritten). Build green
   (`-Plocal-target`), 23/23 in `surefire-reports`, new build `0.1.7.20260810-0639`.
-* **Status: live validation PENDING.** All three defects were *reproduced* live before the fix, but the
-  fixed build has not been re-probed — the sandbox redeploy needs to kill the running EDT tree and that
-  step is awaiting the owner. Note the standing lesson here: these are behavioural rules, and pure-unit
-  green has shipped live-broken fixes before.
+* **Status: LIVE-VALIDATED 2026-08-10**, build `0.1.7.20260810-0639`, sandbox EDT on the same two projects
+  that produced the pre-fix reproductions. `get_diagnostics(scope=file, severity=error)` now answers
+  *2 errors, 0 warnings* (207 chars) where `severity=info` still answers *2 errors, 98 warnings*
+  (2658 chars) — before the fix both were the same 2658-char answer. `grep` finds
+  `GroupResponsibleTreasury` in the `.form` with no `file_pattern` at all, `**/*.form` resolves instead of
+  matching nothing, and a genuine zero now carries the corpus line. `edt_metadata_details` answers
+  `NotAKind.Whatever` with *Unsupported metadata kind* and `Catalog.NoSuchThingHere` with a miss that
+  names the project, while `Role.Accountant`/`ScheduledJob.UpdatingRates` still resolve in full. No
+  regression on plain code search: `MessageToUser` still returns 50 `.bsl` hits (the cap), i.e. the wider
+  corpus does not crowd out code matches.
 
 ### Round-12 (2026-08-04) — `web_publication`: the wsap pin and the publication list both told the truth about a model nobody refreshed (BF-13525)
 
