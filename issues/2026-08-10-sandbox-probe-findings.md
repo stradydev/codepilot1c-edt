@@ -85,3 +85,19 @@ Deliberately not fixed blind: excluding the wrong containment would silently all
 deleted without `recursive`. Instead the refusal now NAMES what it found (`Found: feature(Type),
 feature×N`), which is the better message anyway and makes the next live delete of a `CommonModule`
 identify the feature by itself — no diagnostic-only build round needed.
+
+#### ANSWERED live 2026-08-10 on build `0.1.7.20260810-1011`
+
+The self-identifying message did its job on the first try. Deleting a freshly created
+`CommonModule.EnvExplicitProbe` without `recursive`:
+
+```
+[METADATA_DELETE_CONFLICT] Metadata object has nested children. Use recursive=true:
+CommonModule.EnvExplicitProbe. Found: contextDef(ContextDef)
+```
+
+So the blocking containment is **`contextDef` (`ContextDef`)** — the module's derived context object,
+**not** the BSL source, which was the standing guess. Worth keeping in mind before any future
+exemption: `ContextDef` is derived data EDT rebuilds, so it is a plausible exemption candidate, but a
+`CommonModule` carrying only that is still not proof that no kind ever owns a `contextDef` worth
+protecting. `recursive=true` then deleted it cleanly, as did the same call on the second probe.

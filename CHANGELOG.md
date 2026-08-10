@@ -9,6 +9,43 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Live validation on build `0.1.7.20260810-1011` (2026-08-10)
+
+The owner's redeploy put Round-16…26 on the sandbox and the pending checklist was run. Results, stated
+as what was actually observed rather than as a pass/fail tally:
+
+* **CONFIRMED — `path_contains` (Round-16).** Proven as a *subset*, not as a zero: the unfiltered
+  project scan returned 3 errors, `path_contains=ClientReport_ResellGames` returned exactly the 1 that
+  matched, and `path_contains=ZzzNoSuchModule` returned 0. (The project total later rose 3→6 as EDT
+  finished computing markers — a reminder that an early count is a snapshot, not a total.)
+* **CONFIRMED — `update_infobase`/`launch_app` discoverability (Round-22).** Both `edt_diagnostics` and
+  `update_infobase_status` now carry the "invoke as `edt_diagnostics command=…`" sentence.
+* **CONFIRMED — `edt_validate_request` accepts a serialized payload (Round-25).** A `payload` passed as
+  a JSON *string* returned `valid:true`, which also proves the MCP client no longer drops the argument
+  on type.
+* **CONFIRMED — CommonModule environment default (Round-21).** A `CommonModule` created with no
+  properties came out `server + externalConnection + clientOrdinaryApplication`, `serverCall=false`,
+  and drew **0** diagnostics where the pre-fix build drew 5. Control held too: created with an explicit
+  `clientManagedApplication`, that flag is the *only* one set — the default did not mix in. The
+  project's 2 pre-existing `common-module-type` errors stayed at 2 throughout.
+* **CONFIRMED — `delete_metadata` names the containment (Round-17)**, and it **answered the open
+  question 2a** in `issues/2026-08-10-sandbox-probe-findings.md`: the blocker on a bare `CommonModule`
+  is `contextDef(ContextDef)`, not the BSL source as had been assumed. `recursive=true` then deleted
+  cleanly.
+* **CONFIRMED — module kind (Round-20)** and **the `src/`-prefix fallback (half of Round-19)**:
+  `bsl_module_context` reports `OBJECT_MODULE` (not the old blanket `COMMON_MODULE`), and resolves both
+  the documented spelling and the `src/`-prefixed one a caller pastes out of `glob`.
+* **REGRESSION FOUND — `bsl_object_context` (the other half of Round-19).** Every call that actually
+  reaches a module now times out — on a large document module and on a 2-file project's tiny common
+  module alike — while the same underlying `bsl_module_context`/`bsl_module_exports` calls are instant
+  on the same files. Fixing the doubled-`src/` lookup made the success path reachable for the first
+  time and it does not return. Four candidate causes were tested and refuted; details, the refutations,
+  and the suggested diagnostic-build step are in
+  `issues/2026-08-10-bsl-object-context-hangs-once-modules-resolve.md`. The feedback note
+  `2026-08-08-bsl-object-context-false-missing-modules-existing-files` therefore stays OPEN.
+* **Still pending:** baseline save/diff (Round-18), the endpoint gate (Round-23), the check-help
+  rendering (Round-24) and the new RLS write (Round-26).
+
 ### Round-26 (2026-08-10) — `rights_manage` can author an RLS condition
 
 `rights_manage` could set a grant's value but never its row-level-security condition, so every
