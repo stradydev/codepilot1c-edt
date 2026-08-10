@@ -61,7 +61,7 @@ public class EdtMetadataInspectorService {
                         .setPath(fqn)
                         .setFormatStyle(MetadataNode.FormatStyle.SIMPLE_VALUE)
                         .putProperty("exists", Boolean.FALSE) //$NON-NLS-1$
-                        .putProperty("message", notFoundMessage(fqn)); //$NON-NLS-1$
+                        .putProperty("message", notFoundMessage(fqn, req.getProjectName())); //$NON-NLS-1$
                 nodes.add(missing);
                 continue;
             }
@@ -201,14 +201,47 @@ public class EdtMetadataInspectorService {
      * rather than leaving "Object not found" to be read as "does not exist".
      */
     static String notFoundMessage(String fqn) {
-        if (fqn != null && fqn.split("\\.").length > 2) { //$NON-NLS-1$
+        return notFoundMessage(fqn, null);
+    }
+
+    /**
+     * @param projectName the project the lookup ran against; named in the message so a caller can
+     *            tell "wrong project" from "wrong name" without a second probe
+     */
+    static String notFoundMessage(String fqn, String projectName) {
+        String[] parts = fqn == null ? new String[0] : fqn.split("\\."); //$NON-NLS-1$
+        if (parts.length > 2) {
             return "Object not found: only a top-level <Type>.<Name> FQN is inspected here, and this FQN " //$NON-NLS-1$
                     + "carries extra segments. Pass a nested subsystem as the flat Subsystem.<Name> — the " //$NON-NLS-1$
                     + "only form this tool resolves, since each subsystem is its own top object (the paired " //$NON-NLS-1$
                     + "chain Subsystem.<Parent>.Subsystem.<Name> stays valid for the mutating tools). Child " //$NON-NLS-1$
                     + "objects (attributes, forms, templates) are not addressable through this tool."; //$NON-NLS-1$
         }
-        return "Object not found"; //$NON-NLS-1$
+        if (parts.length < 2) {
+            return "Object not found: an object is addressed by its <Type>.<Name> FQN (Catalog.Companies, " //$NON-NLS-1$
+                    + "Role.Administration, ScheduledJob.UpdatingRates) and this value carries no type token."; //$NON-NLS-1$
+        }
+        if (!isKnownKind(parts[0])) {
+            return "Unsupported metadata kind '" + parts[0] + "': the type token before the dot is not one " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "this tool recognizes, so NOTHING was looked up — this is not evidence that the object " //$NON-NLS-1$
+                    + "is absent. Use a supported token (Catalog, Document, InformationRegister, Role, " //$NON-NLS-1$
+                    + "ScheduledJob, CommonModule, Subsystem, ...) or list what exists with scan_metadata_index."; //$NON-NLS-1$
+        }
+        String where = (projectName == null || projectName.isBlank())
+                ? "" //$NON-NLS-1$
+                : " in project '" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return "Object not found" + where + ": the kind '" + parts[0] + "' IS supported and was searched, so " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "no object of that kind carries this name. Check the name and the project (an object of " //$NON-NLS-1$
+                + "another project reads as missing here), or list them with scan_metadata_index."; //$NON-NLS-1$
+    }
+
+    private static boolean isKnownKind(String typeToken) {
+        try {
+            MetadataKind.fromString(typeToken);
+            return true;
+        } catch (MetadataOperationException e) {
+            return false;
+        }
     }
 
     private Object formatCollectionValue(Collection<?> collection) {
