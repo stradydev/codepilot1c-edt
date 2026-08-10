@@ -101,6 +101,27 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-23 (2026-08-10) — `edt_validate_request` stops issuing tokens for operations this endpoint cannot execute
+
+* **A green light for an unreachable operation.** `ensure_module_artifact` validated to `valid:true` and
+  received a `validation_token` on a port whose profile gates the executing tool off — `discover_tools`
+  listed it under `unavailable` at the same moment. Validation is the layer whose whole mandate is
+  catching a request that cannot go through, and "not exposed on this endpoint" is exactly that, so the
+  token is now refused rather than spent on a `tools/call` that will reject it.
+* **The gate is tested against the *dispatching* tool.** A composite operation such as
+  `dcs_upsert_parameter` is executed by `dcs_manage`; asking about the operation's own name would fail
+  open on every composite one. `ValidationPayloadKeyContract.targetToolName` already made that mapping,
+  and a test asserts every enum value resolves to a name the profile predicate can be asked about — a
+  `null` there would silently fail the gate open for that operation.
+* **Fail-open where the profile is genuinely unknown.** The refusal fires only when the router supplied
+  the calling endpoint's own visibility test. With no predicate (in-process agent call, a test) the
+  global environment view could refuse a call that would have succeeded, so nothing is refused.
+* One trap worth recording: the visibility is a request-scoped `ThreadLocal`, and this tool's
+  `doExecute` hands the work to `CompletableFuture.supplyAsync` — so the predicate is captured on the
+  calling thread. Read inside the async body it would always have been `null`, i.e. a gate that never fires.
+* Tests: `EndpointOperationGateTest` 7/7 against the decision function, driven by a stub profile
+  predicate. Live validation on a gated port pending.
+
 ### Round-22 (2026-08-10) — `update_infobase`/`launch_app`: the name was in the description, the invocation was not
 
 * **Reported as "the documented names aren't discoverable".** Partly refuted by reading the code first:

@@ -4,12 +4,14 @@ import com.codepilot1c.core.tools.SchemaKeyGuard;
 import com.codepilot1c.core.tools.ToolResult;
 import com.codepilot1c.core.tools.ToolParameters;
 import com.codepilot1c.core.tools.ToolMeta;
+import com.codepilot1c.core.tools.ToolExecutionContext;
 import com.codepilot1c.core.tools.AbstractTool;
 
 import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 
 import com.codepilot1c.core.edt.metadata.MetadataOperationException;
 import com.codepilot1c.core.edt.validation.MetadataRequestValidationService;
@@ -73,6 +75,9 @@ public class EdtValidateRequestTool extends AbstractTool {
     @Override
     @SuppressWarnings("unchecked")
     protected CompletableFuture<ToolResult> doExecute(ToolParameters params) {
+        // Read on the CALLING thread: the endpoint visibility is a ThreadLocal the
+        // router sets for this request, and supplyAsync below runs on another thread.
+        Predicate<String> endpointVisible = ToolExecutionContext.endpointToolVisibility();
         return CompletableFuture.supplyAsync(() -> {
             Map<String, Object> parameters = params.getRaw();
             try {
@@ -91,6 +96,10 @@ public class EdtValidateRequestTool extends AbstractTool {
                 ToolResult foreignKeyRefusal = refuseForeignCommandPayloadKeys(operation, payloadMap);
                 if (foreignKeyRefusal != null) {
                     return foreignKeyRefusal;
+                }
+                ToolResult gateRefusal = refuseGatedOperation(operation, requestedOperation, endpointVisible);
+                if (gateRefusal != null) {
+                    return gateRefusal;
                 }
 
                 ValidationRequest request = new ValidationRequest(project, operation, (Map<String, Object>) payloadMap);
@@ -190,6 +199,26 @@ public class EdtValidateRequestTool extends AbstractTool {
                 report.foreignKeys(),
                 SchemaKeyGuard.forDisplay(report.acceptedKeys(), Set.of("validation_token"))); //$NON-NLS-1$
         return ToolResult.failure(errorJson("KNOWLEDGE_REQUIRED", message, false)); //$NON-NLS-1$
+    }
+
+    /**
+     * Refuses an operation whose executing tool the calling endpoint's profile gates off.
+     *
+     * <p>Validating an operation this port cannot execute answered {@code valid:true} and issued a
+     * token that {@code tools/call} would then reject — the tool's whole mandate is to catch a
+     * request that cannot go through, and "not exposed here" is exactly that. The decision lives in
+     * {@link EndpointOperationGate}, and is fail-open when the profile is unknown.</p>
+     *
+     * @return the refusal, or {@code null} when this endpoint can execute the operation
+     */
+    private ToolResult refuseGatedOperation(
+            ValidationOperation operation,
+            String requestedOperation,
+            Predicate<String> endpointVisible
+    ) {
+        String message = EndpointOperationGate.refusalMessageOrNull(
+                operation, requestedOperation, endpointVisible);
+        return message == null ? null : ToolResult.failure(errorJson("TOOL_NOT_EXPOSED", message, false)); //$NON-NLS-1$
     }
 
     private String stringParam(Map<String, Object> params, String key) {
