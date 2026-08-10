@@ -15,13 +15,50 @@ final class RightsManageMessages {
     private RightsManageMessages() {
     }
 
+    /** The grant said nothing about RLS conditions, so whatever it had was left alone. */
+    static final int RESTRICTIONS_UNTOUCHED = 0;
+    /** RLS conditions were requested and already matched — nothing written. */
+    static final int RESTRICTIONS_UNCHANGED = 1;
+    /** RLS conditions were requested and differed — the grant's condition list was rewritten. */
+    static final int RESTRICTIONS_CHANGED = 2;
+
     /** Renders one grant line, honestly marking a real change vs an already-at-value no-op. */
     static String formatGrantSummary(int index, String objectFqn, String rightName,
             String newValueName, String currentValueName, boolean changed) {
+        return formatGrantSummary(index, objectFqn, rightName, newValueName, currentValueName,
+                changed, RESTRICTIONS_UNTOUCHED, 0);
+    }
+
+    /**
+     * Renders one grant line covering BOTH halves of a grant — the right's value and its RLS
+     * conditions — because they change independently: a value can be a no-op while the restriction
+     * is rewritten, and reporting only the value would then read as "nothing happened" on a write
+     * that did happen.
+     *
+     * @param restrictionState one of {@link #RESTRICTIONS_UNTOUCHED} / {@link #RESTRICTIONS_UNCHANGED}
+     *                         / {@link #RESTRICTIONS_CHANGED}
+     * @param conditionCount   how many conditions the grant now holds (0 = cleared)
+     */
+    static String formatGrantSummary(int index, String objectFqn, String rightName,
+            String newValueName, String currentValueName, boolean changed,
+            int restrictionState, int conditionCount) {
         String base = "grant[" + index + "]: " + objectFqn + "." + rightName + "=" + newValueName; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        return changed
+        String value = changed
                 ? base + " (changed from " + currentValueName + ")" //$NON-NLS-1$ //$NON-NLS-2$
                 : base + " (unchanged — already " + currentValueName + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        return value + formatRestrictionSuffix(restrictionState, conditionCount);
+    }
+
+    private static String formatRestrictionSuffix(int restrictionState, int conditionCount) {
+        if (restrictionState == RESTRICTIONS_UNTOUCHED) {
+            return ""; //$NON-NLS-1$
+        }
+        String what = conditionCount == 0
+                ? "restriction cleared" //$NON-NLS-1$
+                : conditionCount + " restriction condition(s)"; //$NON-NLS-1$
+        return restrictionState == RESTRICTIONS_CHANGED
+                ? " [" + what + "]" //$NON-NLS-1$ //$NON-NLS-2$
+                : " [" + what + " — unchanged]"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

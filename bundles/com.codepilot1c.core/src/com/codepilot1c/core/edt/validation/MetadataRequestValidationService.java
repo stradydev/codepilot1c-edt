@@ -708,6 +708,14 @@ public class MetadataRequestValidationService {
             normalized.put("object_fqn", grant.objectFqn()); //$NON-NLS-1$
             normalized.put("right", grant.right()); //$NON-NLS-1$
             normalized.put("value", grant.value()); //$NON-NLS-1$
+            // The tool applies the payload the TOKEN carries, not the one the caller sent, so a
+            // field this canonical form drops is a field the mutation never sees — the request
+            // would validate and then silently write no restriction at all. Only emitted when the
+            // caller actually asked about restrictions: a null here must stay ABSENT, because an
+            // explicit empty list is the erase gesture and the two must not collapse.
+            if (grant.restrictions() != null) {
+                normalized.put("restriction", List.copyOf(grant.restrictions())); //$NON-NLS-1$
+            }
             canonicalGrants.add(normalized);
         }
         payload.put("grants", canonicalGrants); //$NON-NLS-1$

@@ -172,6 +172,7 @@ import com._1c.g5.v8.dt.rights.model.ObjectRights;
 import com._1c.g5.v8.dt.rights.model.Right;
 import com._1c.g5.v8.dt.rights.model.RightValue;
 import com._1c.g5.v8.dt.rights.model.RightsFactory;
+import com._1c.g5.v8.dt.rights.model.Rls;
 import com._1c.g5.v8.dt.rights.model.RoleDescription;
 import com._1c.g5.v8.dt.rights.model.util.RightsModelUtil;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
@@ -6505,11 +6506,26 @@ public class EdtMetadataService {
                     changedHolder[0]++;
                 }
                 touchedRights.add(objectRights);
+                // RLS conditions go on AFTER the value pass, because that pass is what decides
+                // whether the ObjectRight entry exists at all: changeObjectRight DELETES an entry
+                // whose value already equals the current one — but only while its
+                // restrictionsByCondition list is empty (verified by bytecode, 2025.2.3). Writing
+                // the conditions first would therefore make the value pass keep an entry it means
+                // to drop; writing them after leaves us to (re)create the entry ourselves, which is
+                // the case applyRestrictions handles.
+                int restrictionState = grant.restrictions() == null
+                        ? RightsManageMessages.RESTRICTIONS_UNTOUCHED
+                        : applyRestrictions(objectRights, right, newValue, grant.restrictions());
+                if (restrictionState == RightsManageMessages.RESTRICTIONS_CHANGED) {
+                    changedHolder[0]++;
+                }
                 // Track changed-vs-no-op explicitly: a no-op grant must NOT read as "applied" — the
                 // old unconditional summary let a stale-model / already-set case masquerade as a write
                 // (codepilot1c-feedback 2026-07-16-rights-manage-reports-success-but-does-not-persist).
                 applied.add(RightsManageMessages.formatGrantSummary(index, grant.objectFqn(),
-                        right.getName(), newValue.getName(), currentValue.getName(), changed));
+                        right.getName(), newValue.getName(), currentValue.getName(), changed,
+                        restrictionState,
+                        grant.restrictions() == null ? 0 : grant.restrictions().size()));
                 index++;
             }
             // Prune any <object> wrappers left empty by this operation (after a remove, or an unset that
@@ -6815,6 +6831,59 @@ public class EdtMetadataService {
         }
         RightValue defaultValue = RightsModelUtil.getDefaultRightValue(targetObject, role);
         return defaultValue != null ? defaultValue : RightValue.UNSET;
+    }
+
+    /**
+     * Writes one grant's row-level-security conditions onto its {@code ObjectRight}, declaratively:
+     * afterwards the entry holds exactly {@code requested}, in that order.
+     *
+     * <p>Replace rather than append, so re-sending the same request is a no-op instead of stacking a
+     * second identical {@code <restrictionByCondition>} — and so an empty {@code requested} is a
+     * usable erase.</p>
+     *
+     * <p>The entry may legitimately not exist yet: the value pass ahead of this one writes nothing
+     * when the right is already at the requested value, and a role that never granted the right
+     * explicitly has no entry either. Creating it mirrors EDT's own {@code AddRlsTask} (decompiled,
+     * 2025.2.3): value, then right, then into the list. Field-level RLS ({@code Rls.fields}) is left
+     * empty here — the request shape refuses a {@code fields} key rather than pretend to honor it.</p>
+     *
+     * <p>The condition text is NOT parsed or validated: it is SDBL whose grammar lives in the
+     * platform, and EDT raises its own diagnostics on a bad one. Inventing a second, weaker parser
+     * here would only produce false rejections.</p>
+     *
+     * @return one of {@link RightsManageMessages#RESTRICTIONS_CHANGED} /
+     *         {@link RightsManageMessages#RESTRICTIONS_UNCHANGED}
+     */
+    private int applyRestrictions(
+            ObjectRights objectRights,
+            Right right,
+            RightValue value,
+            List<String> requested
+    ) {
+        ObjectRight objectRight = RightsModelUtil.filterObjectRightByRight(right, objectRights.getRights());
+        if (objectRight == null) {
+            if (requested.isEmpty()) {
+                return RightsManageMessages.RESTRICTIONS_UNCHANGED;
+            }
+            objectRight = RightsFactory.eINSTANCE.createObjectRight();
+            objectRight.setValue(value);
+            objectRight.setRight(right);
+            objectRights.getRights().add(objectRight);
+        }
+        List<String> current = new ArrayList<>();
+        for (Rls rls : objectRight.getRestrictionsByCondition()) {
+            current.add(rls == null ? null : rls.getCondition());
+        }
+        if (current.equals(requested)) {
+            return RightsManageMessages.RESTRICTIONS_UNCHANGED;
+        }
+        objectRight.getRestrictionsByCondition().clear();
+        for (String condition : requested) {
+            Rls rls = RightsFactory.eINSTANCE.createRls();
+            rls.setCondition(condition);
+            objectRight.getRestrictionsByCondition().add(rls);
+        }
+        return RightsManageMessages.RESTRICTIONS_CHANGED;
     }
 
     private RightValue toRightValue(String token) {

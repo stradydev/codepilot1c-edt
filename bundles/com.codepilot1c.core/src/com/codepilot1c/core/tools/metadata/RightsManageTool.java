@@ -45,12 +45,16 @@ public class RightsManageTool extends AbstractTool {
                     "properties": {
                       "object_fqn": {"type": "string", "description": "FQN объекта (или под-объекта), для которого задаются права, напр. 'Catalog.OutcomePaymentsTypes'."},
                       "right": {"type": "string", "description": "Имя права для типа объекта: Read/Update/Delete/View/Edit/DeletionMark/Insert/... (как в платформе)."},
-                      "value": {"type": "string", "description": "set | unset | provided | remove. По умолчанию set (выдать право). unset — снять (пишет false), provided — наследуемое значение, remove — полностью удалить запись права и пустой блок объекта (для очистки ошибочного гранта на типе без прав)."}
+                      "value": {"type": "string", "description": "set | unset | provided | remove. По умолчанию set (выдать право). unset — снять (пишет false), provided — наследуемое значение, remove — полностью удалить запись права и пустой блок объекта (для очистки ошибочного гранта на типе без прав)."},
+                      "restriction": {
+                        "type": ["string", "array", "null"],
+                        "description": "RLS-условие(я) для этого гранта: строка, либо список строк/{condition}. Задаёт список условий целиком (не добавляет), поэтому повтор запроса — no-op. Пустой список или пустая строка — снять все условия; ключ отсутствует — существующие условия НЕ трогаются. Условие пишется как есть: это SDBL, его проверяет сам EDT. Пофайловый RLS (fields) не поддержан и ключ 'fields' отклоняется, а не игнорируется."
+                      }
                     },
                     "required": ["object_fqn", "right"],
                     "additionalProperties": true
                   },
-                  "description": "Список грантов прав: {object_fqn, right, value:set|unset|provided}."
+                  "description": "Список грантов прав: {object_fqn, right, value:set|unset|provided, restriction?}."
                 },
                 "validation_token": {
                   "type": "string",
@@ -75,7 +79,8 @@ public class RightsManageTool extends AbstractTool {
 
     @Override
     public String getDescription() {
-        return "Changes a role's rights on metadata objects (a right×object matrix) via the EDT BM model."; //$NON-NLS-1$
+        return "Changes a role's rights on metadata objects (a right×object matrix) via the EDT BM model," //$NON-NLS-1$
+                + " including the RLS condition attached to a grant."; //$NON-NLS-1$
     }
 
     @Override

@@ -9,6 +9,37 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-26 (2026-08-10) — `rights_manage` can author an RLS condition
+
+`rights_manage` could set a grant's value but never its row-level-security condition, so every
+condition-based restriction still meant hand-editing the role's `.rights` file — the exact manual path
+the tool exists to replace (codepilot1c-feedback
+`2026-08-08-rights-manage-cannot-set-rls-restriction-condition`).
+
+* **New optional `restriction` per grant.** Accepts a condition string, a list of them, or
+  `{condition}` objects. It sets the grant's condition list **wholesale**, so re-sending a request is a
+  no-op rather than a second identical `<restrictionByCondition>`. Three states are kept distinct on
+  purpose: key absent = existing conditions untouched (a plain value grant must not silently wipe an
+  RLS), empty list / blank string = explicit erase, non-empty = the conditions to hold.
+* **The field had to survive the validation token, or the feature would have been mute.**
+  `rights_manage` applies the payload the token carries, and `normalizeRightsManagePayload` rebuilt each
+  grant from exactly `object_fqn`/`right`/`value` — any `restriction` was dropped there, silently
+  (`additionalProperties: true` let it in and the normalizer threw it away). The canonical form now
+  carries it, and a test re-parses the *normalized* payload rather than the raw input, which is the only
+  version of that test that can fail when the plumbing breaks.
+* **Order of operations came from EDT's own bytecode, not a guess.** `RightsModelUtil.changeObjectRight`
+  deletes an `ObjectRight` whose value already equals the current one — but only while its
+  `restrictionsByCondition` list is empty (verified on 2025.2.3). Conditions are therefore written
+  *after* the value pass, and the entry is (re)created the way EDT's own `AddRlsTask` creates it when
+  the value pass left none behind.
+* **Refusals instead of silent downgrades.** `fields` (per-field RLS) is rejected rather than dropped —
+  quietly ignoring it would write a whole-object restriction while the caller believed otherwise. So is
+  `value:"remove"` combined with a restriction: removing the grant deletes its conditions too, so
+  honoring both is impossible and honoring either silently misleads.
+* The condition text is **not** parsed here: it is SDBL, EDT raises its own diagnostics on a bad one,
+  and a second weaker parser would only produce false rejections.
+* `RightsManageRestrictionTest` 18/18 (+ existing 12/12 and 6/6 unaffected). Live validation pending.
+
 ### Round-13 (2026-08-10) — three "silent" answers off the bus: two were real, one had already been fixed
 
 Twelve feedback notes arrived on the bus (retro window 2026-08-03…08, back-filled from task
