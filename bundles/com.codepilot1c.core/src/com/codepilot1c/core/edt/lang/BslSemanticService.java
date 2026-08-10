@@ -37,7 +37,6 @@ import com._1c.g5.v8.dt.bsl.model.FormalParam;
 import com._1c.g5.v8.dt.bsl.model.Invocation;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
-import com._1c.g5.v8.dt.bsl.model.ModuleType;
 import com._1c.g5.v8.dt.bsl.model.Pragma;
 import com._1c.g5.v8.dt.bsl.model.Procedure;
 import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
@@ -349,7 +348,7 @@ public class BslSemanticService {
         return new BslModuleContextResult(
                 request.getProjectName(),
                 request.getFilePath(),
-                normalizeModuleType(context.module().getModuleType()),
+                BslModuleTypeResolver.resolve(context.module(), context.resource(), request.getFilePath()),
                 owner != null ? owner.eClass().getName() : null,
                 owner != null ? extractName(owner) : null,
                 owner != null ? EcoreUtil.getURI(owner).toString() : null,
@@ -1003,18 +1002,6 @@ public class BslSemanticService {
         }
         return symbol + "=" + value; //$NON-NLS-1$
     }
-
-    private String normalizeModuleType(ModuleType moduleType) {
-        if (moduleType == null) {
-            return null;
-        }
-        String literal = safeTrim(moduleType.getLiteral());
-        if (literal != null) {
-            return literal;
-        }
-        return safeTrim(moduleType.getName());
-    }
-
 
     private String extractDocumentation(String text, int methodStartOffset) {
         if (text == null || methodStartOffset <= 0) {

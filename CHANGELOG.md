@@ -101,6 +101,34 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-20 (2026-08-10) — `bsl_module_context`: the module kind is now derived, not read off an unset field
+
+* **Every module kind came back `COMMON_MODULE`.** Found while reproducing Round-19: three different
+  module kinds of one document (`ObjectModule.bsl`, `ManagerModule.bsl`, `Forms/DocumentForm/Module.bsl`)
+  answered `COMMON_MODULE` with three different method counts — so the right file was read each time and
+  only the kind was wrong. A form module reported as a common module misleads exactly the caller who asked
+  in order to decide what is legal in that module (`&AtClient`, event handlers, export rules).
+* **The field was never an answer.** `Module.moduleType` is a plain stored EMF attribute whose default is
+  `COMMON_MODULE` (confirmed in `ModuleImpl`: a bare getter over a field, no derivation), and the only
+  thing that assigns it is EDT's derived-state computer — which never runs for a module this bundle takes
+  straight from the parser. So the tool was reporting the untouched default for all sixteen kinds.
+* **Fixed by deriving the kind the way EDT does, not by inventing a path table.** `BslModuleTypeResolver`
+  delegates to `BslUtil.computeModuleType`, EDT's own FQN-keyed mapping, reached through the
+  `IQualifiedNameFilePathConverter` from the BSL language injector (with a non-blocking OSGi service
+  lookup as the second source). The literals therefore cannot drift from EDT's — the issue note had
+  parked the obvious path-table fix precisely because the spellings could not be guessed, and the enum
+  confirms why: it is `RECORDSET_MODULE`, not `RECORD_SET_MODULE`.
+* **A kind that cannot be derived is now reported as unknown rather than as `COMMON_MODULE`.** When no
+  converter is reachable, the stored value is passed on only where it can still be true — under
+  `CommonModules/`, or when the caller gave no path to contradict it. Any other path carrying the default
+  is an unset field, and the field is omitted instead of asserting a kind the module demonstrably lacks.
+  So even total derivation failure is no worse than before on correctness.
+* Tests: `BslModuleTypeResolverTest` 13/13, and behavioural rather than source-contract — each case drives
+  the real `BslUtil.computeModuleType` through a converter stub, so what is pinned is EDT's mapping and
+  the platform-path shape it is fed, not a local copy of either. Live validation pending the next sandbox
+  redeploy; the pre-fix reading is recorded in
+  `issues/2026-08-10-bsl-module-context-moduletype-always-common-module.md`.
+
 ### Round-19 (2026-08-10) — `bsl_object_context`: the "missing" modules were a doubled `src/` prefix
 
 * **Every module of an object whose files exist came back `status: missing`.** Reported for
