@@ -331,6 +331,14 @@ public class YaxunitAuthoringTool extends AbstractTool {
         result.put("fqn", "CommonModule." + moduleName); //$NON-NLS-1$ //$NON-NLS-2$
         result.put("name", moduleName); //$NON-NLS-1$
 
+        // A test module has to be client+server, which is not the server-module
+        // default create_metadata applies when the caller states no environment.
+        // Stated at creation so the module is never momentarily something else.
+        Map<String, Object> environment = new LinkedHashMap<>();
+        environment.put("clientManagedApplication", Boolean.TRUE); //$NON-NLS-1$
+        environment.put("clientOrdinaryApplication", Boolean.TRUE); //$NON-NLS-1$
+        environment.put("server", Boolean.TRUE); //$NON-NLS-1$
+
         try {
             MetadataOperationResult createResult = createMetadataWithValidation(
                     project,
@@ -338,7 +346,7 @@ public class YaxunitAuthoringTool extends AbstractTool {
                     moduleName,
                     moduleSynonym,
                     moduleComment,
-                    Map.of(),
+                    environment,
                     opId);
             result.put("status", "created"); //$NON-NLS-1$ //$NON-NLS-2$
             result.put("message", createResult.message()); //$NON-NLS-1$
@@ -350,12 +358,9 @@ public class YaxunitAuthoringTool extends AbstractTool {
             }
         }
 
-        Map<String, Object> set = new LinkedHashMap<>();
-        set.put("clientManagedApplication", Boolean.TRUE); //$NON-NLS-1$
-        set.put("clientOrdinaryApplication", Boolean.TRUE); //$NON-NLS-1$
-        set.put("server", Boolean.TRUE); //$NON-NLS-1$
+        // Also enforced on the `existing` branch, where creation was skipped.
         Map<String, Object> changes = new LinkedHashMap<>();
-        changes.put("set", set); //$NON-NLS-1$
+        changes.put("set", environment); //$NON-NLS-1$
 
         updateMetadataWithValidation(project, "CommonModule." + moduleName, changes, opId); //$NON-NLS-1$
         result.put("client_server", Boolean.TRUE); //$NON-NLS-1$

@@ -412,6 +412,10 @@ public class EdtMetadataService {
             ensureUuidsRecursively(txObject, opId, fqn);
             // Keep eager link for immediate in-memory visibility in EDT UI.
             addTopLevelObject(txConfiguration, request.kind(), txObject);
+            // Before the caller's own properties: an all-false environment makes a
+            // CommonModule invalid, and applying the default first means an explicit
+            // value always lands last and wins.
+            applyCommonModuleEnvironmentDefaults(txObject, request.kind(), request.properties(), opId, fqn);
             applyTopLevelProperties(
                     txConfiguration,
                     txObject,
@@ -14483,6 +14487,47 @@ public class EdtMetadataService {
         MdObject storage = resolveDefaultReportsVariantsStorage(configuration);
         if (storage != null) {
             object.eSet(variantsStorage, storage);
+        }
+    }
+
+    /**
+     * For a freshly created CommonModule with no caller-supplied environment,
+     * writes the canonical «Server module» flags. A module whose environment
+     * flags are all {@code false} — the ecore default — is invalid by the
+     * platform model: EDT reports four {@code md-legacy-emf-check} errors plus
+     * {@code common-module-type} the moment it is created. The decision of
+     * which flags and when lives in {@link CommonModuleDefaults}; this method
+     * only performs the EMF writes, and only where the value actually differs
+     * so an already-{@code false} flag is not needlessly marked as set.
+     */
+    private void applyCommonModuleEnvironmentDefaults(
+            MdObject object,
+            MetadataKind kind,
+            Map<String, Object> properties,
+            String opId,
+            String fqn
+    ) {
+        if (kind != MetadataKind.COMMON_MODULE || object == null) {
+            return;
+        }
+        Map<String, Boolean> defaults = CommonModuleDefaults.environmentDefaults(
+                properties == null ? Set.of() : properties.keySet());
+        if (defaults.isEmpty()) {
+            LOG.debug("[%s] Environment stated by caller, no default applied for %s", opId, fqn); //$NON-NLS-1$
+            return;
+        }
+        List<String> applied = new ArrayList<>();
+        for (Map.Entry<String, Boolean> entry : defaults.entrySet()) {
+            EStructuralFeature feature = object.eClass().getEStructuralFeature(entry.getKey());
+            if (feature == null || Objects.equals(object.eGet(feature), entry.getValue())) {
+                continue;
+            }
+            object.eSet(feature, entry.getValue());
+            applied.add(entry.getKey());
+        }
+        if (!applied.isEmpty()) {
+            LOG.debug("[%s] Applied default server-module environment to %s: %s", //$NON-NLS-1$
+                    opId, fqn, String.join(", ", applied)); //$NON-NLS-1$
         }
     }
 

@@ -101,6 +101,35 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-21 (2026-08-10) — `create_metadata kind=CommonModule` stops creating a module the platform calls invalid
+
+* **A CommonModule created without properties was born broken.** With no environment flags supplied, all
+  four stay at the ecore default `false`, and EDT answers on the spot with four `md-legacy-emf-check`
+  errors («No one environment is not set», one per property) plus a `common-module-type` code-style error.
+  `md-legacy-emf-check` is EDT core, not a style rule — a module with no environment at all is invalid by
+  the platform model itself. Every caller had to know to repair the object it had just been told was
+  created successfully; `author_yaxunit_tests` already carried exactly that repair as a follow-up
+  `update_metadata`.
+* **Fixed by defaulting to EDT's own canonical «Server module».** `clientOrdinaryApplication`, `server`
+  and `externalConnection` true, everything else false — read off `com.e1c.v8codestyle.md.CommonModuleTypes.SERVER`
+  rather than guessed, and confirmed live: setting exactly those cleared all five diagnostics on the probe
+  module, and the `.mdo` recorded them.
+* **An explicit choice by the caller is never widened.** The gate is all-or-nothing: naming any one
+  environment flag suppresses the default entirely, because a caller who asked for a client module must not
+  receive a server module with client bolted on. `serverCall` deliberately does *not* count as an
+  environment — the check does not accept it in place of one, and a server-call module needs `server`
+  anyway, so `create(serverCall=true)` now yields a valid module instead of the all-false one. The default
+  is also applied *before* the caller's properties, so an explicit value lands last and wins even if the
+  gate were ever wrong about a key.
+* `author_yaxunit_tests` now states its client+server environment at creation instead of creating an
+  invalid module and amending it, so its result is unchanged by the new default and the module is never
+  momentarily something else. The follow-up `update_metadata` stays for the `existing` branch.
+* Tests: `CommonModuleDefaultsTest` 9/9 against the real decision function — including that the default
+  always sets at least one environment, and that the gate matches the same key spellings
+  `create_metadata` resolves (`client_managed_application`, `external-connection`). Live validation
+  pending the next sandbox redeploy. The pre-fix reading is in
+  `issues/2026-08-10-new-module-staleness-probe-findings.md`.
+
 ### Round-20 (2026-08-10) — `bsl_module_context`: the module kind is now derived, not read off an unset field
 
 * **Every module kind came back `COMMON_MODULE`.** Found while reproducing Round-19: three different
