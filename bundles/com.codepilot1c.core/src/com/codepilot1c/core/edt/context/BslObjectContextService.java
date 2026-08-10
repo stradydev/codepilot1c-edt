@@ -161,12 +161,18 @@ public class BslObjectContextService {
             JsonObject moduleEntry = new JsonObject();
             moduleEntry.addProperty("path", relativePath);
             try {
-                BslModuleRequest moduleReq = new BslModuleRequest(req.projectName(), "src/" + relativePath);
+                // NO "src/" prefix here: BslModuleRequest.filePath is documented as relative to src/
+                // and the gateway adds that segment itself. Prepending it made the lookup ask for
+                // src/src/Documents/… while the error printed the single-prefixed path — so every
+                // module of an object whose files exist came back as "missing" citing a path that
+                // plainly resolves in glob/grep/get_diagnostics. Proven live 2026-08-10 on
+                // Document.CasinoCashflowTransactions.
+                BslModuleRequest moduleReq = new BslModuleRequest(req.projectName(), relativePath);
                 BslModuleContextResult ctx = bslSemanticService.getModuleContext(moduleReq);
                 moduleEntry.add("context", GSON.toJsonTree(ctx));
                 if (req.methods() != MethodInclusion.NONE) {
                     BslModuleMethodsRequest exportsReq = new BslModuleMethodsRequest(
-                            req.projectName(), "src/" + relativePath, null, null, 200, 0);
+                            req.projectName(), relativePath, null, null, 200, 0);
                     BslModuleExportsResult exports = bslSemanticService.getModuleExports(exportsReq);
                     if (req.exportsOnly()) {
                         moduleEntry.add("exports", GSON.toJsonTree(exports));

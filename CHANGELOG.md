@@ -101,6 +101,31 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-19 (2026-08-10) — `bsl_object_context`: the "missing" modules were a doubled `src/` prefix
+
+* **Every module of an object whose files exist came back `status: missing`.** Reported for
+  `Document.CasinoCashflowTransactions` (feedback `2026-08-08-bsl-object-context-false-missing-modules-existing-files`,
+  back-filled from BF-7805) and reproduced verbatim on the sandbox: both modules `missing / File not
+  found: src/Documents/CasinoCashflowTransactions/ObjectModule.bsl`, while `glob` listed the file at
+  exactly that path. The note guessed at a rooting divergence from `glob`/`grep`; the cause is smaller and
+  entirely inside the plugin.
+* **`BslModuleRequest.filePath` is documented as relative to `src/` and `resolveSourceFile` adds that
+  segment itself** — the aggregator prepended `src/` on top of it. So the lookup asked for
+  `src/src/Documents/…` while the error message printed `request.getFilePath()`, the single-prefixed path.
+  That mismatch is what made the report read as impossible: the named path really does exist, it just was
+  not the one being checked. Confirmed from both sides through the MCP endpoint before the fix —
+  `bsl_module_context` with the unprefixed path answered with 8 methods, with the prefix it produced the
+  reported error word for word.
+* **Also fixed the wider footgun the same bug exposes: a path pasted from `glob` now resolves.** `glob`
+  prints `src/`-prefixed paths, so handing one to any BSL tool dead-ended in `FILE_NOT_FOUND` naming a
+  path that plainly exists, with nothing in the message hinting at the prefix. `resolveSourceFile` now
+  tries the documented spelling first and the already-prefixed reading as a fallback
+  (`SourceFilePathCandidates`, core, 9 tests) — order chosen so that everything resolving today keeps
+  resolving. `src` alone and a folder merely starting with those letters (`srcgen/…`) are not treated as
+  the prefix.
+* Tests: `SourceFilePathCandidatesTest` 9/9, by result. Live validation pending the next sandbox
+  redeploy — the pre-fix reproduction is already recorded above.
+
 ### Round-18 (2026-08-10) — `get_diagnostics baseline`: the diff rule is now reachable from the tool
 
 * **`baseline` = `off` | `save` | `diff`.** Round-16 implemented and tested the rule in core but left it

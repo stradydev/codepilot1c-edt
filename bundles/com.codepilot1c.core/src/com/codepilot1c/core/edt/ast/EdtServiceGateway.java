@@ -65,14 +65,22 @@ public class EdtServiceGateway {
         return byName;
     }
 
+    /**
+     * Resolves a BSL {@code filePath} argument to a file in {@code project}.
+     *
+     * <p>Tries the documented spelling (relative to {@code src/}) first and an already-{@code src/}-
+     * prefixed one as a fallback — see {@link SourceFilePathCandidates} for why a path pasted from
+     * {@code glob} used to end in {@code FILE_NOT_FOUND} naming a path that exists.</p>
+     */
     public IFile resolveSourceFile(IProject project, String filePath) {
         if (project == null || filePath == null || filePath.isBlank()) {
             return null;
         }
-        IPath relativePath = new Path("src").append(filePath); //$NON-NLS-1$
-        IFile file = project.getFile(relativePath);
-        if (file != null && file.exists()) {
-            return file;
+        for (String candidate : SourceFilePathCandidates.forFilePath(filePath)) {
+            IFile file = project.getFile(new Path(candidate));
+            if (file != null && file.exists()) {
+                return file;
+            }
         }
         return null;
     }
