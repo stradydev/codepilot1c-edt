@@ -174,4 +174,38 @@ public class EdtDiagnosticsCommandContractTest {
         assertTrue(desc.contains("update_infobase -> project_name")); //$NON-NLS-1$
         assertTrue(desc.contains("launch_app -> project_name")); //$NON-NLS-1$
     }
+
+    @Test
+    public void describeRequirements_keepsDeclarationOrder() {
+        // The table is a LinkedHashMap because this rendering is order-sensitive;
+        // Map.copyOf would silently shuffle it.
+        String desc = EdtDiagnosticsCommandContract.describeRequirements();
+        assertTrue("expected declaration order, got:\n" + desc, //$NON-NLS-1$
+                desc.indexOf("metadata_smoke") < desc.indexOf("trace_export") //$NON-NLS-1$ //$NON-NLS-2$
+                && desc.indexOf("trace_export") < desc.indexOf("analyze_error") //$NON-NLS-1$ //$NON-NLS-2$
+                && desc.indexOf("analyze_error") < desc.indexOf("update_infobase") //$NON-NLS-1$ //$NON-NLS-2$
+                && desc.indexOf("update_infobase") < desc.indexOf("launch_app")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // --- describeInvocation: the dispatch-only names are findable ------------
+
+    @Test
+    public void describeInvocation_namesBothCommandsAndHowToCallThem() {
+        // update_infobase and launch_app have no standalone tool, so a caller who
+        // searches the documented name has to be redirected by the description.
+        String desc = EdtDiagnosticsCommandContract.describeInvocation();
+        assertTrue(desc, desc.contains("update_infobase")); //$NON-NLS-1$
+        assertTrue(desc, desc.contains("launch_app")); //$NON-NLS-1$
+        assertTrue(desc, desc.contains("edt_diagnostics command=update_infobase")); //$NON-NLS-1$
+        assertTrue(desc, desc.contains("command=launch_app")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void dispatcherDescriptionCarriesTheInvocationPointer() {
+        // Asserted on the tool's own answer, not on its source: the description
+        // string is the discoverability surface a search actually reads.
+        String desc = new EdtDiagnosticsTool().getDescription();
+        assertTrue(desc, desc.contains("edt_diagnostics command=update_infobase")); //$NON-NLS-1$
+        assertTrue(desc, desc.contains("command=launch_app")); //$NON-NLS-1$
+    }
 }

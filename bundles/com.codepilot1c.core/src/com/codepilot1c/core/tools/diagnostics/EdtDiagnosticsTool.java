@@ -143,6 +143,7 @@ public class EdtDiagnosticsTool extends AbstractTool {
     @Override
     public String getDescription() {
         return "Runs EDT diagnostics and runtime commands: smoke, trace export, error analysis, infobase update, and app launch. " //$NON-NLS-1$
+                + EdtDiagnosticsCommandContract.describeInvocation() + " " //$NON-NLS-1$
                 + "Per-command required fields: " //$NON-NLS-1$
                 + EdtDiagnosticsCommandContract.describeRequirements()
                 + ". project and project_name are interchangeable aliases."; //$NON-NLS-1$

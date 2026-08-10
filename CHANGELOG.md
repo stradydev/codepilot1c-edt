@@ -101,6 +101,24 @@ another turned out to be a different defect than the one reported.
   zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
   branch by result rather than by source text.
 
+### Round-22 (2026-08-10) — `update_infobase`/`launch_app`: the name was in the description, the invocation was not
+
+* **Reported as "the documented names aren't discoverable".** Partly refuted by reading the code first:
+  both literals already reach the surface — `edt_diagnostics`'s description renders the per-command
+  requirements table (`update_infobase -> project_name; launch_app -> project_name`), and
+  `update_infobase_status` names `update_infobase` among the async jobs it polls. What was missing is the
+  one thing a caller needs: that these two have **no standalone tool** and are invoked as
+  `edt_diagnostics command=…`. A search that hits the name and finds no such tool is a dead end either way.
+* **Both descriptions now carry the redirection**, from one shared sentence in
+  `EdtDiagnosticsCommandContract.describeInvocation()` so the dispatcher and the status poller cannot
+  drift apart. The poller also states that it only polls.
+* **Fixed in passing: the requirements table was rendered in arbitrary order.** It is declared as a
+  `LinkedHashMap` because the rendering is order-sensitive, and `Map.copyOf` — which returns an unordered
+  map — threw that away. Now `Collections.unmodifiableMap`, with a test that pins the order.
+* Tests: `EdtDiagnosticsCommandContractTest` 20/20, `UpdateInfobaseStatusToolTest` 7/7. The description
+  assertions call `getDescription()` on the real tools rather than reading the source, since that string
+  *is* the discoverability surface.
+
 ### Round-21 (2026-08-10) — `create_metadata kind=CommonModule` stops creating a module the platform calls invalid
 
 * **A CommonModule created without properties was born broken.** With no environment flags supplied, all

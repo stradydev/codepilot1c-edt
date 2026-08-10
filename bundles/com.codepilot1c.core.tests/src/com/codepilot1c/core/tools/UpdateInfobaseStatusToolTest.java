@@ -140,6 +140,19 @@ public class UpdateInfobaseStatusToolTest {
         assertTrue(unknown.getErrorMessage().contains("Unknown job")); //$NON-NLS-1$
     }
 
+    /**
+     * The poller is the tool a caller searching for "update_infobase" is most
+     * likely to land on by name, and the update itself has no standalone tool —
+     * so the redirection has to be in this description too. Asserted on the
+     * tool's own answer, since the description string is the surface a search reads.
+     */
+    @Test
+    public void descriptionPointsAtHowTheUpdateIsActuallyStarted() {
+        String description = new UpdateInfobaseStatusTool().getDescription();
+        assertTrue(description, description.contains("edt_diagnostics command=update_infobase")); //$NON-NLS-1$
+        assertTrue(description, description.contains("only polls")); //$NON-NLS-1$
+    }
+
     private static JobStatus awaitTerminal(BackgroundJobRegistry registry, String jobId)
             throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

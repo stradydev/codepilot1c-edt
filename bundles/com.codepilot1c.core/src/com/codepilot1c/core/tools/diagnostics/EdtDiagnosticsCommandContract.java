@@ -1,5 +1,6 @@
 package com.codepilot1c.core.tools.diagnostics;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,8 +46,19 @@ public final class EdtDiagnosticsCommandContract {
         table.put("analyze_error", List.of("tool_result")); //$NON-NLS-1$ //$NON-NLS-2$
         table.put("update_infobase", List.of("project_name")); //$NON-NLS-1$ //$NON-NLS-2$
         table.put("launch_app", List.of("project_name")); //$NON-NLS-1$ //$NON-NLS-2$
-        REQUIRED_FIELDS_BY_COMMAND = Map.copyOf(table);
+        // Not Map.copyOf: that returns an unordered map, and describeRequirements
+        // renders this table into the tool description in declaration order.
+        REQUIRED_FIELDS_BY_COMMAND = Collections.unmodifiableMap(table);
     }
+
+    /**
+     * Commands that exist only as {@code edt_diagnostics} sub-commands — no
+     * standalone tool of their own is registered (see {@code ToolRegistry}).
+     * A caller who knows the documented name searches for it and finds
+     * nothing, so the redirection has to be stated where the name is.
+     */
+    private static final List<String> DISPATCH_ONLY_COMMANDS = List.of(
+            "update_infobase", "launch_app"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private EdtDiagnosticsCommandContract() {
     }
@@ -125,6 +137,22 @@ public final class EdtDiagnosticsCommandContract {
      * Pretty-print the contract as a one-line-per-command list, suitable
      * for embedding in the tool description.
      */
+    /**
+     * One sentence naming the {@link #DISPATCH_ONLY_COMMANDS dispatch-only}
+     * commands and how to invoke them. Shared so the status poller can carry
+     * the same pointer as the dispatcher itself.
+     */
+    public static String describeInvocation() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < DISPATCH_ONLY_COMMANDS.size(); i++) {
+            sb.append(i == 0 ? "" : i + 1 == DISPATCH_ONLY_COMMANDS.size() ? " and " : ", ") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    .append(DISPATCH_ONLY_COMMANDS.get(i));
+        }
+        sb.append(" have no standalone tool: invoke them as edt_diagnostics command="); //$NON-NLS-1$
+        sb.append(String.join("/command=", DISPATCH_ONLY_COMMANDS)).append('.'); //$NON-NLS-1$
+        return sb.toString();
+    }
+
     public static String describeRequirements() {
         StringBuilder sb = new StringBuilder();
         boolean first = true;
