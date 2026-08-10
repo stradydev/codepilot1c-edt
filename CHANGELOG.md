@@ -90,6 +90,16 @@ another turned out to be a different defect than the one reported.
 * Reproduced live before the fix (sandbox, `Accounting management` on `File_am_sandbox`, genuinely
   `NOT_EQUAL`): the synthetic-filter run came back `status=no_tests_matched`, `reason=infobase_stale` — the
   exact pair the infra step rejects. Tests: `YaxunitRunToolTest` 20/20, the stale-blame case rewritten.
+* **Status: LIVE-VALIDATED 2026-08-10**, build `0.1.7.20260810-0712`, same sandbox and the same genuinely
+  `NOT_EQUAL` infobase, same synthetic filter (`__InfraWarmupProbe__`) — a before/after pair on one stand,
+  with only the build changed. `reason` is now `filter_matched_nothing` where it was `infobase_stale`, while
+  `status=no_tests_matched` and `equality_state=NOT_EQUAL` are unchanged: the ordering was corrected without
+  suppressing the stale signal. The message still carries the stale hypothesis and the non-convergence
+  advisory, and the verdict stays on the error channel — zero tests means no verdict, per the test-runner
+  channel contract. This is the pair `Step-YaxunitWarmup` accepts as proof the thin client resolved and ran.
+* Not re-run: a live suite with a filter that actually matches. `classifyZeroTests` is reachable only when
+  zero tests executed, so a passing run cannot enter the changed branch; `YaxunitRunToolTest` covers the
+  branch by result rather than by source text.
 
 ### Round-15 (2026-08-10) — `create_metadata adopt_existing`: the orphan path was live-validated on the sandbox after all (BF-13405)
 
