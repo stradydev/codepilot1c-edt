@@ -69,8 +69,26 @@ public class MetadataDetailsFqnRejectionTest {
     @Test
     public void aDegenerateFqnDoesNotBlowUpAndAsksForATypeToken() {
         assertTrue(EdtMetadataInspectorService.notFoundMessage(null).startsWith("Object not found")); //$NON-NLS-1$
-        String message = EdtMetadataInspectorService.notFoundMessage("Configuration"); //$NON-NLS-1$
+        // NB: the bare token "Configuration" used to be the example here — it now RESOLVES (it is
+        // the configuration root's reserved address), so the degenerate case needs a real bare name.
+        String message = EdtMetadataInspectorService.notFoundMessage("Контрагенты"); //$NON-NLS-1$
         assertTrue("a bare name carries no type token — name the expected shape", //$NON-NLS-1$
                 message.contains("no type token")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theConfigurationRootIsNotToldItLacksATypeToken() {
+        // codepilot1c-feedback 2026-09-11-update-metadata-cannot-address-configuration-root: the
+        // root answers to the bare reserved token, so a miss message about a missing type token
+        // would be actively wrong. And the name-segment spelling a caller reaches for next
+        // (Configuration.<ConfigName>) must be told the right form rather than "unsupported kind",
+        // which reads as "this tool cannot see the configuration at all".
+        String message = EdtMetadataInspectorService.notFoundMessage("Configuration.MCPapi"); //$NON-NLS-1$
+        assertTrue("the working spelling must be named:\n" + message, //$NON-NLS-1$
+                message.contains("'Configuration'")); //$NON-NLS-1$
+        assertTrue("a singleton has no <Name> segment — say why:\n" + message, //$NON-NLS-1$
+                message.contains("singleton")); //$NON-NLS-1$
+        assertTrue("the root's editable properties are the point of the hint:\n" + message, //$NON-NLS-1$
+                message.contains("version")); //$NON-NLS-1$
     }
 }

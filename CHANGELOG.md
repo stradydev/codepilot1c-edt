@@ -68,6 +68,72 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-34 (2026-09-14) — the configuration root had no address at all
+
+Reported as a medium blocker (feedback
+`2026-09-11-update-metadata-cannot-address-configuration-root.md`): the root `Configuration` of an
+extension could not be reached by any tool, so `synonym`, `version` and `defaultRoles` — a per-release
+edit on every extension, not an edge case — had no path through MCP. Both spellings a caller reaches
+for were refused, each at a **different stage with a different error**, which is what made it read as
+two unrelated faults: the bare `Configuration` was parsed as a PARENT still waiting for its child part
+(`METADATA_PARENT_NOT_FOUND`), while `Configuration.<ConfigName>` died earlier as an unsupported kind
+(`METADATA_NOT_FOUND`). `edt_validate_request` said `valid:true` for both, because it never inspects
+FQN shape.
+
+**Root cause — the resolver, not the properties.** Every FQN in the toolset is a `<Type>.<Name>` pair;
+`resolveByFqn` and `EdtMetadataInspectorService.findMdObjectByFqn` both require two dotted segments,
+and `MetadataKind` carries no `Configuration` constant (correctly — the root is not a collection of
+objects). The singleton has no `<Name>` to pair with: the configuration's own name is not an FQN name
+part. Nothing about the *properties* was ever missing.
+
+**The fix is one reserved token at the resolve point**, and no new property code:
+
+* `Configuration` (case-insensitive, `Конфигурация` too) now resolves to the root in `resolveByFqn` —
+  the single point both the mutating and the inspecting paths funnel through. The token is not an
+  invention: it is the FQN the BM registers the root under, the literal string `buildExportTargets`
+  has always appended to every force-export batch, and the one that writes
+  `src/Configuration/Configuration.mdo`.
+* Everything downstream was already generic and needed nothing: `applyObjectChanges` treats the root
+  like any other `MdObject`, so `synonym` (the localized-map branch), `version`, `namePrefix`,
+  `compatibilityMode` and `configurationExtensionPurpose` work through the existing
+  `EStructuralFeature` writer with its derived/transient/volatile guard. `collectEolCandidateFiles`
+  already snapshotted `Configuration.mdo` unconditionally. Only `extractTopLevelFqn` needed teaching,
+  because a mutation that writes BM but names no valid export target never reaches disk.
+* **`defaultRoles` is done, not deferred.** It is a many-valued non-containment reference and the
+  generic paths already cover both verbs the note asks for: `unset:["defaultRoles"]` clears the list
+  (`unsetFeatureValue`'s collection branch) and `set:{defaultRoles:[…]}` replaces it wholesale. No
+  `children_ops`-style per-element operation is needed to drop a sole assignment.
+* **The name-segment spelling stays refused on purpose** — accepting two spellings for a singleton
+  buys nothing, and the refusal is the only place a caller learns the right one. Both tools now
+  explain it ("addressed by the bare reserved token … the configuration's own name is not an FQN name
+  part") instead of answering "unsupported kind" / "not found", which read as *this configuration has
+  no such object*.
+* **`delete_metadata` is gated.** The root became addressable so it could be edited; deleting it is a
+  different question and the answer is no — otherwise the new token would reach an unlink walk with no
+  container to unlink from, churning a transaction and the whole export pipeline only to fail in the
+  post-verify.
+* **`edt_metadata_details` on the root no longer dumps the configuration.** The root carries one
+  non-containment reference per metadata kind (`catalogs`, `documents`, …) and none of them is
+  derived, so the generic walk would have resolved and printed every object in the configuration in
+  answer to "what version is this?". Past 20 entries the count is reported and the caller is pointed
+  at `scan_metadata_index`; short lists — every property actually read off the root — still print in
+  full.
+
+Tests: `ConfigurationRootAddressingTest` — 15 behavioural cases driving the real write path over
+factory-built EMF objects (the token and its spellings, the refused name-segment form, a bare
+non-root type token still being a parent error, the export target, `version`/`synonym`/`namePrefix`,
+`defaultRoles` cleared and replaced, and the misspelled-property and rename refusals);
+`MetadataDetailsFqnRejectionTest` gains the root cases — and its old "a bare `Configuration` carries
+no type token" assertion had to go, since that is exactly what changed.
+
+**Live-validated** on build `0.1.7.20260914-1256` against the sandbox (`TestConfiguration`):
+`edt_metadata_details Configuration` rendered the root's properties (and listed `defaultRoles`, so the
+feature is genuinely not derived); `update_metadata` wrote `version=1.0.0` and an `en` synonym, both
+confirmed in `Configuration.mdo` and on a second read; `unset:["defaultRoles"]` ran the collection
+branch end to end; `delete_metadata Configuration` was refused; both tools explained
+`Configuration.TestConfiguration`. Restored afterwards — the `.mdo` is byte-identical (same MD5) to
+its pre-test copy.
+
 ### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route (`24ec1c7`)
 
 Reported as a hard blocker (feedback

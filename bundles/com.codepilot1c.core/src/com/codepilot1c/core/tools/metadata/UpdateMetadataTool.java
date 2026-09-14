@@ -36,7 +36,7 @@ public class UpdateMetadataTool extends AbstractTool {
                 },
                 "target_fqn": {
                   "type": "string",
-                  "description": "FQN already existing metadata object to change. Do not use for new object creation. A nested subsystem is reachable two ways: the flat Subsystem.<Name> is a name-based alias accepted at any depth (rejected as ambiguous when the name is not unique), and the paired chain Subsystem.<Parent>.Subsystem.<Name> is its storage FQN and is accepted too."
+                  "description": "FQN already existing metadata object to change. Do not use for new object creation. A nested subsystem is reachable two ways: the flat Subsystem.<Name> is a name-based alias accepted at any depth (rejected as ambiguous when the name is not unique), and the paired chain Subsystem.<Parent>.Subsystem.<Name> is its storage FQN and is accepted too. The configuration root (synonym, version, namePrefix, defaultRoles, compatibilityMode, configurationExtensionPurpose) is the bare reserved token \\"Configuration\\" — no .<Name> segment, the configuration's own name is not one."
                 },
                 "changes": {
                   "type": "object",

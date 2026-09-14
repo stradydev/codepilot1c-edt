@@ -18,6 +18,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.codepilot1c.core.edt.BmObjectHelper;
+import com.codepilot1c.core.edt.metadata.ConfigurationRootFqn;
 import com.codepilot1c.core.edt.metadata.MetadataKind;
 import com.codepilot1c.core.edt.metadata.MetadataOperationException;
 import com.codepilot1c.core.edt.metadata.TopLevelCollections;
@@ -26,6 +27,13 @@ import com.codepilot1c.core.edt.metadata.TopLevelCollections;
  * Metadata inspection service using EDT configuration model and EMF reflection.
  */
 public class EdtMetadataInspectorService {
+
+    /**
+     * How many entries a collection on the configuration ROOT may carry before it is reported as a
+     * count instead of a listing. Sized so every property a caller reads off the root (languages,
+     * default roles, use purposes, full-text-search dictionaries) still prints in full.
+     */
+    static final int ROOT_COLLECTION_LISTING_CAP = 20;
 
     private final EdtServiceGateway gateway;
     private final ProjectReadinessChecker readinessChecker;
@@ -131,7 +139,7 @@ public class EdtMetadataInspectorService {
             }
 
             if (value instanceof Collection<?> collection) {
-                node.putProperty(feature.getName(), formatCollectionValue(collection));
+                node.putProperty(feature.getName(), formatCollectionValue(object, collection));
             } else {
                 node.putProperty(feature.getName(), formatScalarValue(value));
             }
@@ -167,6 +175,11 @@ public class EdtMetadataInspectorService {
      * resolvable by the flat alias this tool accepts.</p>
      */
     private MdObject findMdObjectByFqn(Configuration config, String fqn) {
+        if (ConfigurationRootFqn.isRootFqn(fqn)) {
+            // The configuration root is a singleton with no <Type>.<Name> pair to parse; it answers
+            // to the bare reserved token, which is also the FQN the BM registers it under.
+            return config;
+        }
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
         if (parts.length != 2) {
             // Only the leading <Type>.<Name> pair is resolved here. Reading it out of a longer FQN and
@@ -209,6 +222,9 @@ public class EdtMetadataInspectorService {
      *            tell "wrong project" from "wrong name" without a second probe
      */
     static String notFoundMessage(String fqn, String projectName) {
+        if (ConfigurationRootFqn.hasRootTypeToken(fqn)) {
+            return ConfigurationRootFqn.nameSegmentRejectionMessage(fqn);
+        }
         String[] parts = fqn == null ? new String[0] : fqn.split("\\."); //$NON-NLS-1$
         if (parts.length > 2) {
             return "Object not found: only a top-level <Type>.<Name> FQN is inspected here, and this FQN " //$NON-NLS-1$
@@ -244,9 +260,25 @@ public class EdtMetadataInspectorService {
         }
     }
 
-    private Object formatCollectionValue(Collection<?> collection) {
+    /**
+     * Renders a collection-valued feature, with one size guard that only the configuration root
+     * ever trips.
+     *
+     * <p>The root's own properties are what this tool is asked for ({@code synonym},
+     * {@code version}, {@code defaultRoles}, …), but the root ALSO carries one non-containment
+     * reference per metadata kind — {@code catalogs}, {@code documents}, {@code commonModules} and
+     * forty more — and none of them is derived, so the generic walk would resolve and print every
+     * object in the configuration. On a real configuration that is thousands of FQNs in answer to
+     * "what version is this?". Those lists are what {@code scan_metadata_index} exists for, so past
+     * a threshold the count is reported instead and the caller is pointed there. Short lists —
+     * every property a caller actually reads off the root — are printed in full as before.</p>
+     */
+    private Object formatCollectionValue(EObject owner, Collection<?> collection) {
         if (collection == null || collection.isEmpty()) {
             return List.of();
+        }
+        if (owner instanceof Configuration && collection.size() > ROOT_COLLECTION_LISTING_CAP) {
+            return collection.size() + " objects — not listed here; enumerate them with scan_metadata_index"; //$NON-NLS-1$
         }
         List<Object> formatted = new ArrayList<>();
         for (Object entry : collection) {

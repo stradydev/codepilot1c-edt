@@ -6369,7 +6369,7 @@ public class EdtMetadataService {
             if (target == null) {
                 throw new MetadataOperationException(
                         MetadataOperationCode.METADATA_NOT_FOUND,
-                        "Metadata object not found: " + request.targetFqn(), false); //$NON-NLS-1$
+                        metadataNotFoundMessage(request.targetFqn()), false);
             }
             applyObjectChanges(txConfiguration, target, request.changes(), request.targetFqn(),
                     transaction, capturedTypes, coEditedSink);
@@ -7012,6 +7012,18 @@ public class EdtMetadataService {
         }
 
         String targetFqn = request.targetFqn();
+        // The root became addressable so it could be EDITED (see ConfigurationRootFqn); deletion is
+        // a different question and the answer is no. Without this gate the new token would reach the
+        // unlink walk, which has no container to unlink the root from — it would churn a
+        // transaction and the whole export pipeline only to fail in the post-verify.
+        if (ConfigurationRootFqn.isRootFqn(targetFqn)) {
+            throw new MetadataOperationException(
+                    MetadataOperationCode.INVALID_METADATA_CHANGE,
+                    "The configuration root cannot be deleted — it is the configuration itself, not an " //$NON-NLS-1$
+                            + "object inside it. '" + ConfigurationRootFqn.TOKEN + "' addresses it for reading " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "(edt_metadata_details) and for property changes (update_metadata) only.", //$NON-NLS-1$
+                    false);
+        }
         ensureNoIncomingReferences(project, configuration, targetFqn, request.force());
         EolGuard eolGuard = beginEolGuard(project, targetFqn, opId);
         // Unlinking a subsystem rewrites the .mdo of every parent that listed it, and those are
@@ -9203,8 +9215,25 @@ public class EdtMetadataService {
         }
     }
 
-    private MdObject resolveByFqn(Configuration configuration, String fqn) {
+    /**
+     * Resolves the object an FQN addresses, or {@code null} when nothing carries that FQN.
+     *
+     * <p>Package-visible so the addressing rules can be pinned by behaviour rather than by source
+     * text — same reason as {@link #findNestedChild}.</p>
+     *
+     * <p>The configuration root is the one target with no {@code <Type>.<Name>} pair to parse: it
+     * answers to the bare reserved token, which is also the FQN the BM registers it under (see
+     * {@link ConfigurationRootFqn}). Handling it HERE — at the single resolve point every mutating
+     * and inspecting path funnels through — is what makes the root a normal target: the generic
+     * property writer in {@link #applyObjectChanges} then treats {@code Configuration} like any
+     * other {@code MdObject}, so {@code synonym}, {@code version}, {@code defaultRoles} and the
+     * rest need no per-property code of their own.</p>
+     */
+    MdObject resolveByFqn(Configuration configuration, String fqn) {
         LOG.debug("resolveByFqn: %s", fqn); //$NON-NLS-1$
+        if (ConfigurationRootFqn.isRootFqn(fqn)) {
+            return configuration;
+        }
         String[] parts = fqn != null ? fqn.split("\\.") : new String[0]; //$NON-NLS-1$
         if (parts.length < 2) {
             throw new MetadataOperationException(
@@ -9938,6 +9967,18 @@ public class EdtMetadataService {
         return parentFqn + "." + kind.getDisplayName() + "." + name; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Names the miss. A caller that reached for the configuration root by its NAME
+     * ({@code Configuration.<ConfigName>}) gets told the reserved spelling instead of a flat
+     * "not found", which would read as "this configuration has no such object".
+     */
+    String metadataNotFoundMessage(String fqn) {
+        if (ConfigurationRootFqn.hasRootTypeToken(fqn)) {
+            return ConfigurationRootFqn.nameSegmentRejectionMessage(fqn);
+        }
+        return "Metadata object not found: " + fqn; //$NON-NLS-1$
+    }
+
     private String extractNameFromFqn(String fqn) {
         if (fqn == null || fqn.isBlank()) {
             return null;
@@ -9950,8 +9991,13 @@ public class EdtMetadataService {
         return value instanceof String str && !str.isBlank() ? str : null;
     }
 
+    /**
+     * Applies a {@code changes} payload to an already-resolved object. Package-visible so the
+     * property-write rules can be pinned by behaviour rather than by source text — same reason as
+     * {@link #findNestedChild}.
+     */
     @SuppressWarnings("unchecked")
-    private void applyObjectChanges(
+    void applyObjectChanges(
             Configuration configuration,
             MdObject target,
             Map<String, Object> changes,
@@ -14154,7 +14200,17 @@ public class EdtMetadataService {
         return parts.length == 2;
     }
 
-    private String extractTopLevelFqn(String fqn) {
+    /**
+     * The top object an FQN belongs to — the force-export target and the EOL-guard key.
+     * Package-visible so the root's export target can be pinned by behaviour: a mutation that
+     * writes the model but never names a valid export target succeeds in BM and never reaches disk.
+     */
+    String extractTopLevelFqn(String fqn) {
+        if (ConfigurationRootFqn.isRootFqn(fqn)) {
+            // The root IS its own top object, and the literal token is what forceExport expects —
+            // buildExportTargets appends exactly this string to every batch.
+            return ConfigurationRootFqn.TOKEN;
+        }
         String[] parts = fqn != null ? fqn.split("\\.") : new String[0]; //$NON-NLS-1$
         if (parts.length < 2) {
             throw new MetadataOperationException(
