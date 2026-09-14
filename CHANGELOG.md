@@ -111,8 +111,14 @@ Not fixed, and not fixable from here: the platform's own two defects. `stopProje
 chain is visible, but they belong to 1C.
 
 `ExtensionCreateProjectVersionTest` 5/5, `ExtensionWorkspaceReadinessGuardTest` 6/6,
-`ExtensionManageToolCauseChainTest` 4/4. Live validation on a real EDT is still pending (no MCP
-endpoint in that session), so the guard has not yet been seen firing on a genuinely cold workspace.
+`ExtensionManageToolCauseChainTest` 4/4.
+
+Live-validated against the sandbox EDT (port 8763, build `0.1.7.20260914-1100`): `edt_validate_request`
+now refuses `version=1.0.0` before a token is issued, with the full supported-version list in the
+message; `version=8.3.27` created `ZZZ_SmokeTest_Round30` end to end, landing `READY` and visible in
+`list_projects`. The guard's own refuse branch was not caught live — this workspace's three projects
+settle to `READY` faster than an HTTP round trip, so the `BUILDING` window closed before `create` ran;
+that branch is covered only by the mocked `ExtensionWorkspaceReadinessGuardTest`.
 
 ### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder (`10c5c2e`)
 
@@ -145,8 +151,13 @@ pointing everyone at `connect_infobase`. That last correction also went into the
 `INFOBASE_NOT_FOUND` hint, whose old advice was actively unusable for a server entry.
 
 `EdtInfobaseAssociationRegistryGuardTest` 7/7 — the folder-nested `bind`, the restore, the untouched
-registry, the loud failure, and both tool-level JSON contracts. Live validation on a real EDT is still
-pending (no MCP endpoint in that session).
+registry, the loud failure, and both tool-level JSON contracts.
+
+Live-validated against the sandbox EDT: `File_am_sandbox_rb` (`Folder=/_Folder` in `ibases.v8i` — a
+genuinely foldered row, not a synthetic one) was dissociated from its bound branch, then `bind`
+found and reattached it under a brand-new branch context that had never referenced it — the exact
+`INFOBASE_NOT_FOUND` round-trip from the feedback note, now succeeding. State was restored to its
+original binding afterward.
 
 ### Round-28 (2026-08-10) — `rights_manage`: refuse a grant-level `fields`, do not drop it
 
