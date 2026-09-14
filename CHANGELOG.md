@@ -68,6 +68,65 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it
+
+Reported as a major blocker (feedback
+`2026-09-11-rights-manage-false-object-does-not-support-rights-httpservice.md`): three `Use` grants on
+`HTTPService.MCPApi.URLTemplate.<T>.Method.<M>` were refused with
+`[INVALID_METADATA_CHANGE] Object does not support rights: …`, while the very same workspace carries
+dozens of committed `<object><name>HTTPService.Inventory.URLTemplate.Application.Method.Get</name>`
+grants. The claim in the message was false, and disproving it cost a debugging session.
+
+**Root cause — one gate, one predicate.** `manageRights` guarded every grant with
+`RightsModelUtil.isMdObjectHasRights(target)`, which is
+`ALL_SUPPORTED_RIGHT_ECLASSES.contains(target.eClass())`: an **exact** eClass-set membership over the
+*top-level* metadata kinds (plus the four external-data-source leaves `Field`/`Resource`/`Dimension`/
+`Function`). It is not a supertype test and says nothing about sub-objects, so it refused **every**
+sub-object, not just HTTP methods. Verified empirically against the 2025.2.3 model rather than
+assumed — `topLevelPred=false` for `URLTemplate`, `Method`, `CatalogAttribute`,
+`CatalogTabularSection`, a tabular-section attribute, `CatalogCommand`, `Recalculation` and
+`Operation` alike. So the answer to "did catalog/document attributes and tabular sections already
+work?" is **no — they were broken identically, by the same line**, and the comment in `resolveRight`
+that assumed sub-objects reached it was describing dead code.
+
+**The fix** adds `RightsTargetSupport`, which asks the platform's *other* API of that same utility
+class — `getSubobjectEClasses(parent)` / `isSubobjectEClassHasRights(parent, childEClass)`, the pair
+the platform rights editor itself uses to build its tree. A target is addressable if its own kind
+carries rights **or** its parent carries rights on that kind. The downstream
+`IRightInfosService.getEClassRights` check is left as the sole authority on whether the kind actually
+exposes a right, so the two questions stop being answered by one coarse predicate. `:6462` was a
+duplicating, narrower gate in front of `:6756`, not the source of truth — it is now structural only.
+
+Both refusal messages were rewritten so neither asserts a platform capability it cannot know: the
+addressing refusal names itself as a `rights_manage` limit and lists what the parent *does* carry
+rights on; the rights-catalogue refusal names the resolved kind and points a `URLTemplate` at its
+`Method`.
+
+Test: `RightsTargetSupportTest` — 14 behavioural cases over real EMF metadata objects (not source
+text), covering the reported shape, every sub-object kind the old gate silently refused, the two
+refusals that legitimately remain, and the message wording.
+
+**Live-validated** on build `0.1.7.20260914-1224` against the sandbox (`Accounting management`,
+role `API_Callback`):
+
+* `Use` on `HTTPService.Inventory.URLTemplate.Application.Method.Get` — *"1 of 1 grant(s) changed …
+  Use=Set (changed from Unset)"*, and `Rights.rights` on disk gained the entry in exactly the shape
+  the committed counterexample has.
+* `View=unset` on `Catalog.HostServices.Attribute.ServiceID` — a sub-object write with a non-default
+  value, landed on disk as `View=false`. (At the role's default it correctly reports "already at the
+  requested value" and writes nothing.)
+* `HTTPService.Inventory.URLTemplate.Application` — refused by the rights-catalogue guard naming the
+  kind and pointing at `Method`, not by an addressing claim.
+* `Catalog.HostServices.Form.ItemForm` — the new tool-scoped refusal, listing the parent's
+  rights-bearing sub-object kinds.
+* `value:remove` reverted both writes; the sandbox role file is byte-identical to `HEAD`.
+
+**Observation, not fixed here (separate item):** `edt_validate_request` returned `valid:true` for the
+failing payload because `normalizeRightsManagePayload` never resolves an FQN or touches the project
+model — it only checks payload shape. After this fix the reported case is honest by accident (the
+executor now succeeds), but the validator still cannot tell a caller whether a grant is writable.
+Making it model-aware is an architectural change to the validation layer and is left as its own item.
+
 ### Round-31 (2026-09-14) — `ensure_module_artifact` on a gated endpoint: document the fallback, don't change the gate
 
 Reported as a pipeline gap (feedback `2026-09-11-ensure-module-artifact-unavailable-on-dev-endpoint.md`):

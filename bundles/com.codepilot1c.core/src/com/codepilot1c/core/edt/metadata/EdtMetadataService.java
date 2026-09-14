@@ -6459,10 +6459,20 @@ public class EdtMetadataService {
                             MetadataOperationCode.METADATA_NOT_FOUND,
                             "Rights target object not found: " + grant.objectFqn(), false); //$NON-NLS-1$
                 }
-                if (!RightsModelUtil.isMdObjectHasRights(targetObject)) {
+                // Structural gate only — "can a rights entry be addressed at this node at all".
+                // It used to be a bare RightsModelUtil.isMdObjectHasRights, which is an EXACT
+                // eClass-set membership over TOP-LEVEL kinds and therefore refused every sub-object:
+                // HTTPService.X.URLTemplate.T.Method.M, a catalog attribute, a tabular section, an
+                // object command, a recalculation — all of them, while the error text claimed the
+                // platform grants no rights there (codepilot1c-feedback
+                // 2026-09-11-rights-manage-false-object-does-not-support-rights-httpservice, whose
+                // counterexample sits committed in the same workspace). RightsTargetSupport adds the
+                // platform's own sub-object answer (getSubobjectEClasses / isSubobjectEClassHasRights).
+                // Whether the kind exposes any configurable right stays resolveRight's question.
+                if (!RightsTargetSupport.isRightsAddressable(targetObject)) {
                     throw new MetadataOperationException(
                             MetadataOperationCode.INVALID_METADATA_CHANGE,
-                            "Object does not support rights: " + grant.objectFqn(), false); //$NON-NLS-1$
+                            RightsTargetSupport.refusalMessage(grant.objectFqn(), targetObject), false);
                 }
                 if (RightsManageRequest.VALUE_REMOVE.equals(grant.value())) {
                     // Removal escape hatch: fully drop an explicit right entry (and prune the now-empty
@@ -6747,25 +6757,35 @@ public class EdtMetadataService {
                 Integer.valueOf(globalRights == null ? 0 : globalRights.size()), rightNames(eClassRights));
         // Applicability guard (regression-safe). When the rights service is warm (the global pool is
         // populated) yet the target's OWN eClass exposes zero configurable rights, the object type does
-        // not support rights at all — e.g. an Enum, whose Designer rights row is empty. The coarse
-        // isMdObjectHasRights guard cannot catch this (Enum's EClass is in ALL_SUPPORTED_RIGHT_ECLASSES),
+        // not support rights at all — e.g. an Enum, whose Designer rights row is empty. The structural
+        // RightsTargetSupport gate cannot catch this (Enum's EClass is in ALL_SUPPORTED_RIGHT_ECLASSES),
         // so without this a grant would resolve any right by NAME from the global pool and persist a
         // stray <object>Enum.X</object> block that stalls the DB restructure for minutes (BF-12936).
+        // This is also the guard that answers for sub-objects the structural gate now lets through but
+        // that carry no right of their own — a URLTemplate is addressable in the rights tree yet has no
+        // RightInfo, so it lands here rather than in a "does not support rights" claim.
         // Gated on a non-empty global pool so a cold/uninitialised service never yields a false reject.
         boolean serviceWarm = globalRights != null && !globalRights.isEmpty();
         if (serviceWarm && (eClassRights == null || eClassRights.isEmpty())) {
             throw new MetadataOperationException(
                     MetadataOperationCode.INVALID_METADATA_CHANGE,
-                    "Object '" + objectFqn + "' has no configurable access rights — its metadata type " //$NON-NLS-1$ //$NON-NLS-2$
-                            + "carries no rights in the platform (e.g. an Enum), so no grant can be " //$NON-NLS-1$
-                            + "written. Use value:remove to strip a previously written stray block.", //$NON-NLS-1$
+                    "Object '" + objectFqn + "' (metadata kind: " //$NON-NLS-1$ //$NON-NLS-2$
+                            + (rightsEClass == null ? "<unknown>" : rightsEClass.getName()) //$NON-NLS-1$
+                            + ") has no configurable access rights: the platform's rights catalogue lists " //$NON-NLS-1$
+                            + "no right for this kind, so no grant can be written. Kinds that sit in the " //$NON-NLS-1$
+                            + "rights tree yet carry no right of their own land here — an Enum, an HTTP " //$NON-NLS-1$
+                            + "service's URL template (grant its Method instead). Use value:remove to " //$NON-NLS-1$
+                            + "strip a previously written stray block.", //$NON-NLS-1$
                     false);
         }
         // Resolve the Right object by name. Keep the pre-existing resolution order (global pool first,
         // eClass set as fallback) so grant resolution for objects that DO support rights — registers,
-        // catalogs, and sub-objects (fields/attributes, whose eClass rights come via supertype
-        // fallbacks) — is unchanged; only the zero-rights-type case above is newly rejected. Tightening
-        // resolution to the eClass set is deferred to a follow-up round (needs sub-object validation).
+        // catalogs, and sub-objects (methods/attributes/tabular sections, whose eClass rights come via
+        // getEClassRights' supertype fallbacks onto BASIC_FEATURE / BASIC_COMMAND /
+        // BASIC_TABULAR_SECTION) — is unchanged. Tightening resolution to the eClass set is deferred to
+        // a follow-up round; note that until the RightsTargetSupport fix, NO sub-object ever reached
+        // this method at all — the structural gate rejected them first — so the sub-object half of this
+        // resolution order was dead code in practice, not proven behaviour.
         Set<Right> candidates = (globalRights != null && !globalRights.isEmpty()) ? globalRights : eClassRights;
         if (candidates != null) {
             for (Right candidate : candidates) {
