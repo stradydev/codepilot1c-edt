@@ -68,6 +68,24 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-31 (2026-09-14) — `ensure_module_artifact` on a gated endpoint: document the fallback, don't change the gate
+
+Reported as a pipeline gap (feedback `2026-09-11-ensure-module-artifact-unavailable-on-dev-endpoint.md`):
+on the `dev` MCP profile, `ensure_module_artifact` is in `disableTools` even though `create_metadata` (the
+same logical pipeline) is enabled there, leaving a freshly created top-level object's `.bsl` unmaterialized
+with no in-profile way to create it.
+
+Checked before touching anything: `dev`'s tool set is deliberate, not an oversight — Round-23
+(2026-08-10) already hardened `edt_validate_request` to refuse a token for `ensure_module_artifact` on a
+profile that gates it off, treating the exclusion as a fact to respect rather than a bug. `~/.codepilot1c/mcp-profiles.json`
+is shared runtime config outside this repo, curated through its own per-tool UI editor (Phase 4,
+`e58ca92`), and affects every role that connects through `dev` — not something to flip from here on one
+feedback note. `edt-metadata-operations.md` (the in-repo, plugin-served knowledge resource) said
+unconditionally "ALWAYS ensure_module_artifact before edit_file", which is simply wrong on a profile that
+excludes it. Documented the fallback instead: a plain file write at the conventional
+`<Owner>/<Name>/Module.bsl` path, which the note itself already used successfully (`.bsl` carries no
+UUID/cross-refs a raw write could corrupt, unlike `.mdo`/`.form`).
+
 ### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`58fa1c8`)
 
 Reported as a critical, 100 %-reproducible platform defect (feedback
