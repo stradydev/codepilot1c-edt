@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder
+### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder (`10c5c2e`)
 
 Reported as "`dissociate` deletes the EDT registry entry and `bind` cannot restore it" (feedback
 `2026-09-14-dissociate-removes-registry-entry-bind-cannot-restore.md`): a `kind=server` stand was
