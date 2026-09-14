@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it
+### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it (`270d184`)
 
 Reported as a major blocker (feedback
 `2026-09-11-rights-manage-false-object-does-not-support-rights-httpservice.md`): three `Use` grants on
