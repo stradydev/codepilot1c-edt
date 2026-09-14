@@ -44,7 +44,7 @@ public class ManageAssociationsTool extends AbstractTool {
                 "action": {
                   "type": "string",
                   "enum": ["list", "bind", "copy", "dissociate"],
-                  "description": "list: all branch contexts with bound infobases and default markers. bind: attach an EXISTING registry infobase to a branch's context (no checkout needed). copy: replicate one branch's bindings onto another branch. dissociate: detach infobase(s) from a branch's context."
+                  "description": "list: all branch contexts with bound infobases and default markers. bind: attach an EXISTING registry infobase to a branch's context (no checkout needed). copy: replicate one branch's bindings onto another branch. dissociate: detach infobase(s) from a branch's context ONLY — the EDT registry entry survives (verified and repaired on every call), so the exact inverse bind reattaches it; no re-registration and no credentials needed."
                 },
                 "project_name": {
                   "type": "string",
@@ -103,7 +103,9 @@ public class ManageAssociationsTool extends AbstractTool {
 
     @Override
     public boolean requiresConfirmation() {
-        return false; // reversible binding edits; no registry writes, no credentials, no data
+        // Reversible binding edits; no credentials, no data. The only registry write is the
+        // dissociate guard's restore of a row EDT dropped — a repair, never a removal.
+        return false;
     }
 
     @Override
@@ -140,7 +142,11 @@ public class ManageAssociationsTool extends AbstractTool {
                     default -> throw new EdtToolException(EdtToolErrorCode.INVALID_ARGUMENT,
                             "unknown action '" + action + "': expected list | bind | copy | dissociate"); //$NON-NLS-1$ //$NON-NLS-2$
                 };
-                return ToolResult.success(pretty(payload), ToolResult.ToolResultType.CODE);
+                // A handler may downgrade its own payload (dissociate does when the registry-survival
+                // guard could not restore a dropped row): honor that instead of forcing success.
+                return isSuccess(payload)
+                        ? ToolResult.success(pretty(payload), ToolResult.ToolResultType.CODE)
+                        : ToolResult.failure(pretty(payload));
             } catch (EdtToolException e) {
                 LOG.warn(String.format("[%s] manage_associations action=%s failed with %s: %s", //$NON-NLS-1$
                         opId, action, e.getCode() == null ? "<unknown>" : e.getCode().name(), //$NON-NLS-1$
@@ -231,7 +237,40 @@ public class ManageAssociationsTool extends AbstractTool {
         JsonArray removed = new JsonArray();
         outcome.removed().forEach(removed::add);
         payload.add("removed", removed); //$NON-NLS-1$
+        if (!outcome.registryIntact()) {
+            // The registry-survival guard fired. Surface it either way: a silent "removed: [...]"
+            // would let the caller believe the entry is still bindable when it may not be.
+            JsonArray restored = new JsonArray();
+            outcome.registryRestored().forEach(restored::add);
+            payload.add("registry_restored", restored); //$NON-NLS-1$
+        }
+        if (!outcome.registryLost().isEmpty()) {
+            JsonArray lost = new JsonArray();
+            outcome.registryLost().forEach(lost::add);
+            payload.add("registry_lost", lost); //$NON-NLS-1$
+            payload.addProperty("success", Boolean.FALSE); //$NON-NLS-1$
+            payload.addProperty("error_code", //$NON-NLS-1$
+                    EdtToolErrorCode.EDT_SERVICE_UNAVAILABLE.name());
+            payload.addProperty("message", //$NON-NLS-1$
+                    "Dissociated from the branch context, but EDT dropped the flat registry entry " //$NON-NLS-1$
+                            + "of " + outcome.registryLost() //$NON-NLS-1$
+                            + " and it could not be re-registered — the infobase registry is now " //$NON-NLS-1$
+                            + "INCOMPLETE and bind of that name will fail until it is restored."); //$NON-NLS-1$
+            payload.addProperty("hint", //$NON-NLS-1$
+                    "re-register with connect_infobase (kind=file needs only database_path; " //$NON-NLS-1$
+                            + "kind=server needs the infobase's server credentials, so its owner " //$NON-NLS-1$
+                            + "must do it), then bind again"); //$NON-NLS-1$
+        }
         return payload;
+    }
+
+    /** Reads a handler payload's own {@code success} flag (absent/malformed counts as success). */
+    private static boolean isSuccess(JsonObject payload) {
+        com.google.gson.JsonElement flag = payload == null ? null : payload.get("success"); //$NON-NLS-1$
+        if (flag == null || !flag.isJsonPrimitive()) {
+            return true;
+        }
+        return flag.getAsJsonPrimitive().isBoolean() ? flag.getAsBoolean() : true;
     }
 
     private static JsonObject base(String opId, String projectName) {
@@ -251,9 +290,17 @@ public class ManageAssociationsTool extends AbstractTool {
         payload.addProperty("error_code", code.name()); //$NON-NLS-1$
         payload.addProperty("message", e.getMessage() == null ? "" : e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
         if (code == EdtToolErrorCode.INFOBASE_NOT_FOUND) {
+            // Do NOT reflexively point at connect_infobase: for a kind=server entry that advice is
+            // unactionable (and unsafe) for a caller with no server credentials. Feedback 2026-09-14.
             payload.addProperty("hint", //$NON-NLS-1$
-                    "manage_associations attaches only EXISTING registry entries; " //$NON-NLS-1$
-                            + "register a new infobase with connect_infobase first"); //$NON-NLS-1$
+                    "manage_associations attaches only EXISTING registry entries. Check the name " //$NON-NLS-1$
+                            + "first (action=list, or connect_infobase's registry view) — " //$NON-NLS-1$
+                            + "dissociate never removes a registry entry, so the name may simply " //$NON-NLS-1$
+                            + "be spelled differently. Only if the entry is genuinely gone, " //$NON-NLS-1$
+                            + "re-register with connect_infobase: kind=file needs just " //$NON-NLS-1$
+                            + "database_path, but kind=server (Srvr/Ref) needs the infobase's " //$NON-NLS-1$
+                            + "server credentials — without them the infobase owner must " //$NON-NLS-1$
+                            + "re-register it"); //$NON-NLS-1$
         } else if (code == EdtToolErrorCode.EDT_LEASE_HELD) {
             payload.addProperty("hint", //$NON-NLS-1$
                     "the target branch is leased by another stack; release it there " //$NON-NLS-1$

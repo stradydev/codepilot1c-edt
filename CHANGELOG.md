@@ -68,6 +68,40 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder
+
+Reported as "`dissociate` deletes the EDT registry entry and `bind` cannot restore it" (feedback
+`2026-09-14-dissociate-removes-registry-entry-bind-cannot-restore.md`): a `kind=server` stand was
+detached from a branch context, and the symmetric `bind` back then answered `INFOBASE_NOT_FOUND` —
+unrecoverable in-session, because re-registering a server entry needs credentials an infra caller does
+not hold. `ibases.v8i` still carried the row, `Srvr`/`Ref`/`ID` intact.
+
+`dissociate` was innocent. Disassembling `InfobaseAssociationManager` (services.core 21.0.0 / 2025.2.x)
+shows it only re-serializes the association's `Infobases`/`DefaultInfobase` properties into the
+per-project settings store and fires the dissociation event — no `IInfobaseManager` write anywhere on
+that path, and no registered `IInfobaseAssociationListener` makes one either. (The cascade runs the
+other way: a registry *reload* that drops a row dissociates its associations.)
+
+The real defect was ours. `IInfobaseManager.getAll()` returns only the registry resource's **top-level**
+sections; a row carrying `Folder=/STAGE` sits inside a `Group` and is simply not in that list — which is
+why EDT's own `findInfobaseByName`/`findInfobaseByUuid` pipe `getAll()` through
+`InfobaseReferences.asPlainList` first. `resolveRegistryRow` swept the raw list, so **every foldered
+infobase was invisible to `bind`** — before the dissociate as much as after it. Fixed by flattening, in
+`manage_associations` and in `connect_infobase`'s `findCandidatesByName` backstop sweep (where the same
+blind spot could hide a name collision and let a duplicate registration through).
+
+`dissociate` additionally now *proves* its own contract instead of asserting it: each target's registry
+row is snapshotted before the platform call and, if it is gone afterwards, re-registered via
+`IInfobaseManager.add(row, folder)` — the same row object, back into the same v8i folder, needing no
+credentials. The outcome reports `registry_restored`, and a restore that fails yields `success:false`
+with `registry_lost` plus a hint that says a `kind=server` re-registration needs the owner rather than
+pointing everyone at `connect_infobase`. That last correction also went into the generic
+`INFOBASE_NOT_FOUND` hint, whose old advice was actively unusable for a server entry.
+
+`EdtInfobaseAssociationRegistryGuardTest` 7/7 — the folder-nested `bind`, the restore, the untouched
+registry, the loud failure, and both tool-level JSON contracts. Live validation on a real EDT is still
+pending (no MCP endpoint in that session).
+
 ### Round-28 (2026-08-10) — `rights_manage`: refuse a grant-level `fields`, do not drop it
 
 Round-26 promised that a `fields` key is refused rather than ignored, because a silently dropped one

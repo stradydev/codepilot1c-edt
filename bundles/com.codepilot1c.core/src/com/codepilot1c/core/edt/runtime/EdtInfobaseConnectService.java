@@ -796,12 +796,15 @@ public class EdtInfobaseConnectService {
         // surface via these targeted lookups (the NAME_COLLISION check then let the call proceed
         // and a later EDT step surfaced an "Association does not contain ..." error). Sweep
         // manager.getAll() as a backstop so both the collision check AND idempotent reconnect see
-        // the full v8i registry.
+        // the full v8i registry. NB: getAll() yields only TOP-LEVEL sections — a row carrying
+        // Folder=/X lives inside a Group and is absent from it — so the list must be flattened the
+        // way EDT's own lookups do (InfobaseReferences.asPlainList), or the backstop silently skips
+        // every foldered infobase (feedback 2026-09-14).
         try {
-            for (Section section : manager.getAll()) {
-                if (section instanceof InfobaseReference ref
-                        && name.equals(ref.getName())
-                        && !candidates.contains(ref)) {
+            List<Section> top = manager.getAll();
+            for (InfobaseReference ref : InfobaseReferences.asPlainList(
+                    top == null ? List.of() : top)) {
+                if (name.equals(ref.getName()) && !candidates.contains(ref)) {
                     candidates.add(ref);
                 }
             }

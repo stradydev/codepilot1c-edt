@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspaceRoot;
@@ -81,7 +82,44 @@ public class EdtInfobaseAssociationService {
     public record CopyOutcome(String fromContext, String toContext, List<String> copied, String defaultName) {
     }
 
-    public record DissociateOutcome(String context, List<String> removed) {
+    /**
+     * Result of a dissociate call.
+     *
+     * @param context          the branch context the infobases were detached from
+     * @param removed          names detached from that context
+     * @param registryRestored names whose FLAT REGISTRY row vanished across the platform
+     *                         {@code dissociate} call and was put back by the guard in
+     *                         {@link #dissociate} — normally empty (see that method's contract)
+     * @param registryLost     names whose registry row vanished AND could not be re-registered:
+     *                         the registry is now incomplete and a later {@code bind} of that name
+     *                         will fail
+     */
+    public record DissociateOutcome(String context, List<String> removed,
+            List<String> registryRestored, List<String> registryLost) {
+
+        public DissociateOutcome(String context, List<String> removed) {
+            this(context, removed, List.of(), List.of());
+        }
+
+        /** True when the registry came out of the call exactly as it went in. */
+        public boolean registryIntact() {
+            return registryRestored.isEmpty() && registryLost.isEmpty();
+        }
+    }
+
+    /** Flat-registry row of a dissociate target, captured BEFORE the platform call. */
+    private record RegistrySnapshot(IInfobaseManager manager, InfobaseReference row, String name,
+            String identity, UUID uuid, String folder) {
+    }
+
+    /** Verdict of the post-dissociate registry check. */
+    private enum RegistryGuard {
+        /** The row is still registered (the normal outcome) — or there was nothing to guard. */
+        INTACT,
+        /** The row had vanished and was successfully re-registered. */
+        RESTORED,
+        /** The row had vanished and could NOT be re-registered — the registry is incomplete. */
+        LOST
     }
 
     // -- list -------------------------------------------------------------------------------
@@ -231,7 +269,19 @@ public class EdtInfobaseAssociationService {
 
     /**
      * Detaches infobase(s) from the branch context: the named one, or ALL bound ones when
-     * {@code infobaseName} is null. Registry rows and lease files are left untouched.
+     * {@code infobaseName} is null. Registry rows and lease files are left untouched — this is the
+     * exact inverse of {@link #bind}, so the same entry can be reattached afterwards.
+     *
+     * <p>Registry survival is <em>enforced</em>, not assumed: each target's flat-registry row is
+     * snapshotted before the platform call and re-registered (same row, same v8i folder) if it is
+     * gone afterwards. On 2025.2.x the platform {@code dissociate} provably cannot drop it —
+     * bytecode-verified on {@code InfobaseAssociationManager}: it re-serializes the association's
+     * {@code Infobases}/{@code DefaultInfobase} properties into the per-project settings store and
+     * fires the dissociation event, with no {@code IInfobaseManager} write on that path or in any
+     * registered listener. The guard exists because the recovery cost is wildly asymmetric: a
+     * {@code kind=server} row cannot be re-created without the infobase's server credentials, which
+     * the caller who dissociated it generally does not hold (feedback 2026-09-14). A failed
+     * restore is reported, never swallowed.</p>
      */
     public DissociateOutcome dissociate(String projectName, String branch, String infobaseName) {
         IProject project = resolveProject(projectName);
@@ -254,7 +304,10 @@ public class EdtInfobaseAssociationService {
                             : "Infobase '" + infobaseName + "' is not bound under branch '" + branch + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         List<String> removed = new ArrayList<>();
+        List<String> registryRestored = new ArrayList<>();
+        List<String> registryLost = new ArrayList<>();
         for (InfobaseReference ref : targets) {
+            RegistrySnapshot snapshot = snapshotRegistryRow(ref);
             try {
                 manager.dissociate(project, ref, ctx);
                 removed.add(ref.getName());
@@ -262,8 +315,131 @@ public class EdtInfobaseAssociationService {
                 throw new EdtToolException(EdtToolErrorCode.EDT_SERVICE_UNAVAILABLE,
                         "Failed to dissociate '" + ref.getName() + "': " + detail(e), e); //$NON-NLS-1$ //$NON-NLS-2$
             }
+            switch (ensureRegistryRowSurvived(snapshot)) {
+                case RESTORED -> registryRestored.add(snapshot.name());
+                case LOST -> registryLost.add(snapshot.name());
+                default -> { /* INTACT — the normal path */ }
+            }
         }
-        return new DissociateOutcome(contextValue(ctx), removed);
+        return new DissociateOutcome(contextValue(ctx), removed, registryRestored, registryLost);
+    }
+
+    // -- registry guard ---------------------------------------------------------------------
+
+    /**
+     * Captures the flat-registry row backing {@code ref} so it can be put back should the platform
+     * call drop it. Returns {@code null} when there is nothing to guard (registry unreadable, or
+     * the reference has no registry row at all) — in that case the guard stays out of the way.
+     */
+    private RegistrySnapshot snapshotRegistryRow(InfobaseReference ref) {
+        IInfobaseManager manager;
+        try {
+            manager = gateway.getInfobaseManager();
+        } catch (RuntimeException e) {
+            LOG.warn("manage_associations dissociate: registry unreadable, skipping the " //$NON-NLS-1$
+                    + "registry-survival guard: %s", detail(e)); //$NON-NLS-1$
+            return null;
+        }
+        if (manager == null) {
+            return null;
+        }
+        try {
+            InfobaseReference row = findRegistryRow(manager, InfobaseIdentity.identityOf(ref),
+                    ref.getUuid(), ref.getName());
+            if (row == null) {
+                return null;
+            }
+            return new RegistrySnapshot(manager, row, row.getName(),
+                    InfobaseIdentity.identityOf(row), row.getUuid(), row.getFolder());
+        } catch (RuntimeException e) {
+            LOG.warn("manage_associations dissociate: failed to snapshot the registry row of " //$NON-NLS-1$
+                    + "'%s': %s", ref.getName(), detail(e)); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Verifies the snapshotted row is still registered and re-registers it (into the same v8i
+     * folder) when it is not. {@code add(section, folder)} is EDT's own registration entry point —
+     * the very one {@code connect_infobase} uses — and needs no credentials: the row object carries
+     * everything it had (connection string, UUID, name), so a {@code kind=server} entry is restored
+     * without its server login.
+     */
+    private RegistryGuard ensureRegistryRowSurvived(RegistrySnapshot snapshot) {
+        if (snapshot == null || registryContains(snapshot)) {
+            return RegistryGuard.INTACT;
+        }
+        LOG.warn("manage_associations dissociate: the flat registry row of '%s' disappeared across " //$NON-NLS-1$
+                + "the platform call — re-registering it (folder=%s)", //$NON-NLS-1$
+                snapshot.name(), snapshot.folder());
+        try {
+            String folder = snapshot.folder();
+            snapshot.manager().add(snapshot.row(),
+                    folder == null || folder.isBlank() ? null : folder);
+        } catch (Exception | LinkageError e) {
+            LOG.error(String.format("manage_associations dissociate: FAILED to re-register the " //$NON-NLS-1$
+                    + "registry row of '%s' — the infobase registry is now incomplete", //$NON-NLS-1$
+                    snapshot.name()), e);
+            return RegistryGuard.LOST;
+        }
+        if (!registryContains(snapshot)) {
+            LOG.error(String.format("manage_associations dissociate: re-registration of '%s' " //$NON-NLS-1$
+                    + "reported success but the row is still not in the registry", snapshot.name())); //$NON-NLS-1$
+            return RegistryGuard.LOST;
+        }
+        return RegistryGuard.RESTORED;
+    }
+
+    /** True when the snapshotted row is (still) present in the flat registry. */
+    private static boolean registryContains(RegistrySnapshot snapshot) {
+        try {
+            return findRegistryRow(snapshot.manager(), snapshot.identity(), snapshot.uuid(),
+                    snapshot.name()) != null;
+        } catch (RuntimeException e) {
+            // An unreadable registry is not evidence of a dropped row — do not "restore" blindly.
+            LOG.warn("manage_associations dissociate: registry read-back failed for '%s': %s", //$NON-NLS-1$
+                    snapshot.name(), detail(e));
+            return true;
+        }
+    }
+
+    /** The registry row matching a UUID / connection identity / name, or {@code null}. */
+    private static InfobaseReference findRegistryRow(IInfobaseManager manager, String identity,
+            UUID uuid, String name) {
+        for (InfobaseReference row : registryRows(manager)) {
+            if (uuid != null && uuid.equals(row.getUuid())) {
+                return row;
+            }
+            String rowIdentity = InfobaseIdentity.identityOf(row);
+            if (identity != null && rowIdentity != null) {
+                if (InfobaseIdentity.matches(identity, rowIdentity)) {
+                    return row;
+                }
+                continue;
+            }
+            if (name != null && name.equals(row.getName())) {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every infobase row of the flat registry, INCLUDING rows nested in {@code ibases.v8i} folders.
+     *
+     * <p>{@code IInfobaseManager.getAll()} returns only the registry resource's TOP-LEVEL sections
+     * (bytecode-verified on services.core 21.0.0 / 2025.2.x: it filters
+     * {@code getInfobasesResource().getContents()} to {@code Section} and never descends). A row
+     * carrying {@code Folder=/Something} lives inside a {@link com._1c.g5.v8.dt.platform.services.model.Group}
+     * section and is therefore ABSENT from that list — which is why EDT's own
+     * {@code findInfobaseByName} / {@code findInfobaseByUuid} always pipe {@code getAll()} through
+     * {@code InfobaseReferences.asPlainList} first. Sweeping the raw list instead is what made
+     * {@code bind} answer INFOBASE_NOT_FOUND for a foldered server infobase that was sitting in the
+     * registry the whole time (feedback 2026-09-14).</p>
+     */
+    private static List<InfobaseReference> registryRows(IInfobaseManager manager) {
+        Collection<Section> top = manager.getAll();
+        return top == null ? List.of() : InfobaseReferences.asPlainList(top);
     }
 
     // -- plumbing ---------------------------------------------------------------------------
@@ -300,6 +476,9 @@ public class EdtInfobaseAssociationService {
      * Finds the EXISTING registry row by display name and/or file path (both given — both must
      * match). Never creates rows: an unknown infobase is a typed error pointing at
      * {@code connect_infobase}, whose job registry lifecycle is.
+     *
+     * <p>Sweeps the FLATTENED registry ({@link #registryRows}) so rows nested in {@code ibases.v8i}
+     * folders are found too — the raw {@code getAll()} list holds only top-level sections.</p>
      */
     protected InfobaseReference resolveRegistryRow(String infobaseName, String databasePath) {
         if ((infobaseName == null || infobaseName.isBlank())
@@ -321,10 +500,7 @@ public class EdtInfobaseAssociationService {
         }
         List<InfobaseReference> matches = new ArrayList<>();
         try {
-            for (Section section : manager.getAll()) {
-                if (!(section instanceof InfobaseReference row)) {
-                    continue;
-                }
+            for (InfobaseReference row : registryRows(manager)) {
                 if (infobaseName != null && !infobaseName.isBlank()
                         && !infobaseName.equals(row.getName())) {
                     continue;
@@ -344,8 +520,10 @@ public class EdtInfobaseAssociationService {
                     "No registered infobase matches " //$NON-NLS-1$
                             + (infobaseName == null ? "" : "name '" + infobaseName + "' ") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                             + (databasePath == null ? "" : "path '" + databasePath + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                            + ". manage_associations only attaches EXISTING registry entries; " //$NON-NLS-1$
-                            + "register a new infobase with connect_infobase first."); //$NON-NLS-1$
+                            + ". manage_associations only attaches EXISTING registry entries " //$NON-NLS-1$
+                            + "(folders included). Re-registering one needs connect_infobase — " //$NON-NLS-1$
+                            + "credential-free for kind=file, but a kind=server entry (Srvr/Ref) " //$NON-NLS-1$
+                            + "needs the infobase's server login, so its owner must do it."); //$NON-NLS-1$
         }
         if (matches.size() > 1) {
             throw new EdtToolException(EdtToolErrorCode.INVALID_ARGUMENT,
