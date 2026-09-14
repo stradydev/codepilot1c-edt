@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`__COMMIT__`)
+### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`58fa1c8`)
 
 Reported as a critical, 100 %-reproducible platform defect (feedback
 `2026-09-11-extension-manage-create-internal-error-project-context.md`): every `create` died inside the
