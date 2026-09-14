@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-34 (2026-09-14) — the configuration root had no address at all
+### Round-34 (2026-09-14) — the configuration root had no address at all (`d8bbf65`)
 
 Reported as a medium blocker (feedback
 `2026-09-11-update-metadata-cannot-address-configuration-root.md`): the root `Configuration` of an
