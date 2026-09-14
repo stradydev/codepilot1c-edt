@@ -38,12 +38,12 @@ public class AddMetadataChildTool extends AbstractTool {
                 },
                 "parent_fqn": {
                   "type": "string",
-                  "description": "FQN существующего owner object. Use this tool only when parent already exists. None of the child kinds below hangs off a Subsystem, so an owner here is always an object kind such as Catalog.Foo or Document.Bar."
+                  "description": "FQN существующего owner object. Use this tool only when parent already exists. None of the child kinds below hangs off a Subsystem, so an owner here is always an object kind such as Catalog.Foo or Document.Bar — or a nested owner for child_kind=Method, whose parent is an existing URL template: HTTPService.Foo.URLTemplate.Bar."
                 },
                 "child_kind": {
                   "type": "string",
-                  "enum": ["Attribute", "Tabular_Section", "Command", "Form", "Template", "Dimension", "Resource", "Requisite", "EnumValue"],
-                  "description": "Kind of new child object. Do not use for top-level objects. Use EnumValue for child values of an Enum parent."
+                  "enum": ["Attribute", "Tabular_Section", "Command", "Form", "Template", "Dimension", "Resource", "Requisite", "EnumValue", "URLTemplate", "Method"],
+                  "description": "Kind of new child object. Do not use for top-level objects. Use EnumValue for child values of an Enum parent. URLTemplate hangs off an HTTPService; Method hangs off an existing URLTemplate, not off the service."
                 },
                 "name": {
                   "type": "string",
@@ -81,7 +81,7 @@ public class AddMetadataChildTool extends AbstractTool {
                 },
                 "properties": {
                   "type": "object",
-                  "description": "Дополнительные параметры. Для batch: children=[{name,synonym,comment}]. Для атрибутов/ресурсов/измерений: type (напр. String, Number, CatalogRef.Foo), length (для String), precision/scale (для Number), multiLine, fillChecking, и др. Для Command: commandParameterType (тип или массив типов, напр. [\\"DocumentRef.Invoice\\"]), group (стандартная группа по имени, напр. FormCommandBarImportant, либо FQN пользовательской CommandGroup.Foo), representation (Auto/Text/Picture/PictureAndText), parameterUseMode, modifiesData, shortcut."
+                  "description": "Дополнительные параметры. Для batch: children=[{name,synonym,comment}]. Для атрибутов/ресурсов/измерений: type (напр. String, Number, CatalogRef.Foo), length (для String), precision/scale (для Number), multiLine, fillChecking, и др. Для Command: commandParameterType (тип или массив типов, напр. [\\"DocumentRef.Invoice\\"]), group (стандартная группа по имени, напр. FormCommandBarImportant, либо FQN пользовательской CommandGroup.Foo), representation (Auto/Text/Picture/PictureAndText), parameterUseMode, modifiesData, shortcut. Для URLTemplate: template (напр. /v1/whoami, допустимы параметры вида /v1/tools/{name}). Для Method: httpMethod (GET/POST/PUT/DELETE/…, по умолчанию GET), handler (имя процедуры в модуле HTTP-сервиса)."
                 },
                 "validation_token": {
                   "type": "string",
@@ -107,7 +107,8 @@ public class AddMetadataChildTool extends AbstractTool {
     @Override
     public String getDescription() {
         return "Creates a child metadata object under an existing owner via the EDT BM API. " //$NON-NLS-1$
-                + "Supports Attribute, Tabular_Section, Command, Form, Template, Dimension, Resource, Requisite, EnumValue."; //$NON-NLS-1$
+                + "Supports Attribute, Tabular_Section, Command, Form, Template, Dimension, Resource, Requisite, EnumValue, URLTemplate, Method. " //$NON-NLS-1$
+                + "An HTTP service route takes two calls: URLTemplate under HTTPService.<Name>, then Method under that template's FQN."; //$NON-NLS-1$
     }
 
     @Override

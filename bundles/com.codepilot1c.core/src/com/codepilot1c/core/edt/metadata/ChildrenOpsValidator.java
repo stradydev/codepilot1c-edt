@@ -75,6 +75,23 @@ public final class ChildrenOpsValidator {
         return "children_ops op '" + rawOp //$NON-NLS-1$
                 + "' is not supported: children_ops only operates on existing children." //$NON-NLS-1$
                 + " To create a new child use the add_metadata_child tool" //$NON-NLS-1$
-                + " (parent_fqn=<target>, child_kind=<Attribute|TabularSection|EnumValue|...>)."; //$NON-NLS-1$
+                + " (parent_fqn=<target>, child_kind=<" + creatableChildKinds() + ">)."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The creatable kinds, read off {@link MetadataChildKind} itself rather than hand-listed here.
+     * The old hand-written "Attribute|TabularSection|EnumValue|..." both understated the list and
+     * went stale the moment a kind was added — and this message is the only place an agent that
+     * reached for {@code children_ops op=add} is told what it may create instead.
+     */
+    private static String creatableChildKinds() {
+        StringBuilder builder = new StringBuilder();
+        for (MetadataChildKind kind : MetadataChildKind.values()) {
+            if (builder.length() > 0) {
+                builder.append('|');
+            }
+            builder.append(kind.getDisplayName());
+        }
+        return builder.toString();
     }
 }

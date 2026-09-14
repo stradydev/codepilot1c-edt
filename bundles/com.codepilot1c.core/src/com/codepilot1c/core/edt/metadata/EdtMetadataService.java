@@ -8378,7 +8378,12 @@ public class EdtMetadataService {
                 effectiveKind);
     }
 
-    private String createGenericChildForResolvedParent(
+    /**
+     * The whole create-one-child path, minus project/BM plumbing. Package-visible so a test can
+     * drive it over factory-built EMF objects (a {@code null} configuration and transaction are
+     * tolerated by every step below) instead of asserting on the text of this method.
+     */
+    String createGenericChildForResolvedParent(
             Configuration configuration,
             MdObject parent,
             AddMetadataChildRequest request,
@@ -8407,7 +8412,7 @@ public class EdtMetadataService {
                     transaction,
                     request.parentFqn(),
                     request.name());
-            applyCommandProperties(configuration, child, request.properties(), transaction);
+            applySimpleChildProperties(configuration, child, request.properties(), transaction);
             createdFqns.add(buildChildFqn(request.parentFqn(), effectiveKind, request.name()));
         }
         createdFqns.addAll(addChildrenBatch(
@@ -9331,7 +9336,8 @@ public class EdtMetadataService {
         return hits.get(0).node();
     }
 
-    private MdObject findNestedChild(MdObject parent, String marker, String childName) {
+    /** Package-visible so the nested-FQN marker rules can be pinned by behaviour, not by source text. */
+    MdObject findNestedChild(MdObject parent, String marker, String childName) {
         String normalizedMarker = normalizeToken(marker);
         for (EStructuralFeature feature : parent.eClass().getEAllStructuralFeatures()) {
             if (!(feature instanceof EReference reference) || !reference.isContainment() || !reference.isMany()) {
@@ -9401,8 +9407,10 @@ public class EdtMetadataService {
 
     private String extractShortClassMarker(String className) {
         String normalized = className != null ? className : ""; //$NON-NLS-1$
+        // "URLTemplate" must precede "Template": the EClass IS named URLTemplate, and matching the
+        // shorter tail first would advertise "Template" as a marker for it.
         String[] tails = {
-                "Attribute", "TabularSection", "Command", "Form", "Template", "Dimension", "Resource", "Requisite", "EnumValue" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+                "Attribute", "TabularSection", "Command", "Form", "URLTemplate", "Template", "Dimension", "Resource", "Requisite", "EnumValue", "Method" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$ //$NON-NLS-11$
         };
         for (String tail : tails) {
             if (normalized.endsWith(tail)) {
@@ -9454,7 +9462,7 @@ public class EdtMetadataService {
     }
 
     private int indexOfNestedSuffix(String name, MetadataChildKind kind) {
-        String[] suffixes = {"TabularSection", "Attribute", "Command", "Form", "Template", "Dimension", "Resource", "Requisite", "EnumValue"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+        String[] suffixes = {"TabularSection", "Attribute", "Command", "Form", "URLTemplate", "Template", "Dimension", "Resource", "Requisite", "EnumValue", "Method"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$ //$NON-NLS-10$ //$NON-NLS-11$
         String own = kind.getDisplayName();
         for (String suffix : suffixes) {
             if (!suffix.equals(own)) {
@@ -9514,7 +9522,17 @@ public class EdtMetadataService {
             }
             String featureName = normalizeToken(reference.getName());
             String singular = singularize(featureName);
-            if (!normalizedKind.equals(featureName) && !normalizedKind.equals(singular)) {
+            // singularize() strips a trailing "es" wholesale, so "urltemplates" becomes
+            // "urltemplat" and never matches the URLTemplate kind by name. Without the plain
+            // "drop one s" spelling the URLTemplate/Method kinds would only ever be placed by the
+            // untyped fallback loop below — right answer today, but by accident rather than by the
+            // feature's own name.
+            String plainSingular = featureName.endsWith("s") //$NON-NLS-1$
+                    ? featureName.substring(0, featureName.length() - 1)
+                    : featureName;
+            if (!normalizedKind.equals(featureName)
+                    && !normalizedKind.equals(singular)
+                    && !normalizedKind.equals(plainSingular)) {
                 continue;
             }
             if (reference.getEReferenceType().isSuperTypeOf(child.eClass())) {
@@ -9578,7 +9596,7 @@ public class EdtMetadataService {
                         transaction,
                         parentFqn,
                         name);
-                applyCommandProperties(configuration, child, childProperties, transaction);
+                applySimpleChildProperties(configuration, child, childProperties, transaction);
                 createdFqns.add(buildChildFqn(parentFqn, kind, name));
             } catch (MetadataOperationException e) {
                 if (e.getCode() != MetadataOperationCode.METADATA_ALREADY_EXISTS) {
@@ -9689,41 +9707,60 @@ public class EdtMetadataService {
     }
 
     /**
-     * Applies command-specific properties (commandParameterType, group, representation,
-     * parameterUseMode, modifiesData, shortcut, toolTip, …) supplied to add_metadata_child
-     * onto a freshly created {@link BasicCommand}. Without this, the create path kept only
-     * name/synonym and silently dropped every other supplied Command property. Each key is
-     * routed through the shared feature setter — which resolves {@code commandParameterType}
-     * and {@code group} — and fails loud on an unknown field rather than dropping it.
+     * Applies the free-form {@code properties} supplied to add_metadata_child onto a freshly
+     * created child whose create-time settings are plain EMF features — a {@link BasicCommand}
+     * (commandParameterType, group, representation, parameterUseMode, modifiesData, shortcut,
+     * toolTip, …), a {@code URLTemplate} ({@code template}) or an HTTP-service {@code Method}
+     * ({@code httpMethod}, {@code handler}).
+     *
+     * <p>Without this, the create path kept only name/synonym and silently dropped every other
+     * supplied property — the child appeared in the {@code .mdo} carrying nothing but its name and
+     * no error was raised. Each key is routed through the shared feature setter, which resolves
+     * {@code commandParameterType}/{@code group} and fails loud on an unknown field rather than
+     * dropping it.</p>
      */
-    private void applyCommandProperties(
+    private void applySimpleChildProperties(
             Configuration configuration,
             MdObject child,
             Map<String, Object> properties,
             IBmPlatformTransaction transaction
     ) {
-        if (!(child instanceof BasicCommand) || properties == null || properties.isEmpty()) {
+        if (!isSimplePropertyBagChild(child) || properties == null || properties.isEmpty()) {
             return;
         }
         Map<String, TypeItem> preResolvedTypes = new HashMap<>();
         List<String> applied = new ArrayList<>();
         for (Map.Entry<String, Object> entry : properties.entrySet()) {
             String key = entry.getKey();
-            if (key == null || key.isBlank() || isReservedCommandProperty(key)) {
+            if (key == null || key.isBlank() || isReservedChildProperty(key)) {
                 continue;
             }
-            // A Command is never a Subsystem, so no two-sided link can be written here — hence no
-            // co-edited-FQN sink.
+            // None of these children is a Subsystem, so no two-sided link can be written here —
+            // hence no co-edited-FQN sink.
             setFeatureValue(configuration, child, key, entry.getValue(), transaction, preResolvedTypes, null);
             applied.add(key);
         }
         if (!applied.isEmpty()) {
-            LOG.info("Applied %d command properties on %s (%s)", //$NON-NLS-1$
-                    Integer.valueOf(applied.size()), child.getName(), String.join(", ", applied)); //$NON-NLS-1$
+            LOG.info("Applied %d create-time properties on %s %s (%s)", //$NON-NLS-1$
+                    Integer.valueOf(applied.size()), child.eClass().getName(), child.getName(),
+                    String.join(", ", applied)); //$NON-NLS-1$
         }
     }
 
-    private boolean isReservedCommandProperty(String key) {
+    /**
+     * Children whose add_metadata_child {@code properties} are ordinary EMF features that the
+     * shared feature setter can write directly — as opposed to a {@link BasicFeature}, whose
+     * {@code type} needs BM type resolution (see {@link #applyDefaultTypeIfNeeded}), or a form or
+     * template, whose create-time options go through their own initializers.
+     */
+    private boolean isSimplePropertyBagChild(MdObject child) {
+        return child instanceof BasicCommand
+                || child instanceof com._1c.g5.v8.dt.metadata.mdclass.URLTemplate
+                // NB fully qualified: java.lang.reflect.Method is imported here for invokeFactory.
+                || child instanceof com._1c.g5.v8.dt.metadata.mdclass.Method;
+    }
+
+    private boolean isReservedChildProperty(String key) {
         return switch (normalizeToken(key)) {
             case "name", "synonym", "comment", "uuid", "children", "attributes" -> true; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             default -> false;

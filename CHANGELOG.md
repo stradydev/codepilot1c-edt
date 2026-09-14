@@ -68,6 +68,64 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route
+
+Reported as a hard blocker (feedback
+`2026-09-11-add-metadata-child-cannot-create-httpservice-urltemplate.md`): `HTTPService.MCPApi` was
+created normally, but none of its three `URLTemplate`s — nor the `Method` under each — could be
+authored by any tool. Four structurally different mechanisms were probed live and all four refused:
+`add_metadata_child` (`INVALID_METADATA_KIND`), `create_metadata` with a dotted name
+(`INVALID_METADATA_NAME`), `update_metadata.changes.set` ("Containment reference updates are not
+supported in set"), and `update_metadata.changes.children_ops op=add` ("children_ops only operates on
+existing children"). Each refusal pointed at the next mechanism and the last pointed back at the
+first, so the circle closed with no way through. The platform has always supported the shape — the
+base configuration ships `HTTPService.Callback` with a parameterised `/{id}`, and the sandbox's
+`HTTPService.Inventory` carries five committed templates.
+
+**Root cause — one closed enum.** `MetadataChildKind` listed nine kinds and neither `URLTemplate` nor
+`Method` was among them, so every path died at the same `fromString` gate, before any BM work. The
+creation machinery underneath is already generic: `createChildByFactory` finds
+`MdClassFactory.createURLTemplate()`/`createMethod()` by reflection, `resolveTargetReference` finds
+the owning containment feature by name, and `findNestedChild` already resolved
+`HTTPService.<S>.URLTemplate.<T>` — that last one needed **no** change, which is why reading was
+never broken (`edt_metadata_details` has always listed `urlTemplates`).
+
+**The fix** is deliberately narrow — exactly one authoring path becomes usable:
+
+* `MetadataChildKind` gains `URL_TEMPLATE`/`METHOD` with the usual alias set, and the tool schema and
+  description offer them. A route is two calls: `URLTemplate` under `HTTPService.<Name>`, then
+  `Method` under that template's own FQN — `Method`'s owner is the template, never the service.
+* Create-time properties now reach both kinds. The old `applyCommandProperties` only ever ran for a
+  `BasicCommand`, so `template`/`httpMethod`/`handler` would have been **silently dropped** — the same
+  failure mode BF-12936 fixed for `Command`. It is now `applySimpleChildProperties`, covering every
+  child whose settings are plain EMF features, and an unknown key still fails loud instead of
+  vanishing.
+* `resolveTargetReference` matched a collection by `singularize()`, which strips a trailing `es`
+  wholesale and turns `urlTemplates` into `urltemplat`. A plain "drop one `s`" spelling was added, so
+  the template is placed by the feature's own name rather than by the untyped fallback loop — which
+  happened to give the right answer, but by accident. `extractShortClassMarker` now tests
+  `URLTemplate` before `Template` so the EClass is not advertised under the shorter tail.
+* The `children_ops op=add` refusal used to hand-list "Attribute|TabularSection|EnumValue|..."; it now
+  reads the creatable kinds off the enum, so it can no longer go stale.
+
+Everything the note reported as *correctly* refusing still refuses, verified live: `create_metadata`
+with a dotted name is top-level-only, and `set` on a containment collection still says "Use
+children_ops/add_metadata_child" — a pointer that is now true rather than circular.
+
+Tests: `HttpServiceRouteChildTest` — 10 behavioural cases driving the real create path over
+factory-built EMF objects (template and parameterised template, nested method with and without an
+explicit verb, batch creation, the unknown-property refusal, an owner with no such collection, and
+the nested-FQN markers); `AddMetadataChildToolHttpServiceTest` — 3 cases for the schema contract and
+the payload path through validation + token.
+
+**Live-validated** on build `0.1.7.20260914-1240` against the sandbox (`Accounting management`,
+`HTTPService.Inventory`): `CpTestRoute` + `/v1/test` created, then `Get`/`V1TestGet` and
+`Post`/`POST`/`V1TestPost` under it. The written `.mdo` matches the committed precedent element for
+element — `<urlTemplates uuid=…><name/><template/><methods uuid=…><name/><httpMethod/><handler/>` —
+including the platform convention that a GET method omits `<httpMethod>` entirely. The model agreed
+(`edt_metadata_details` listed the template with the same uuid), CRLF was preserved, and after a
+recursive `children_ops delete` the file was byte-identical to its pre-test SHA-256.
+
 ### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it (`270d184`)
 
 Reported as a major blocker (feedback
