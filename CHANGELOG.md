@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route
+### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route (`24ec1c7`)
 
 Reported as a hard blocker (feedback
 `2026-09-11-add-metadata-child-cannot-create-httpservice-urltemplate.md`): `HTTPService.MCPApi` was
