@@ -49,7 +49,7 @@ public class ExtensionManageTool extends AbstractTool {
                 },
                 "project": {
                   "type": "string",
-                  "description": "Base EDT project name"
+                  "description": "Base EDT project name. Required by create, adopt and set_state - each rejects a missing project - and must equal base_project; list_projects and list_objects ignore it"
                 },
                 "base_project": {
                   "type": "string",
@@ -81,7 +81,7 @@ public class ExtensionManageTool extends AbstractTool {
                 },
                 "version": {
                   "type": "string",
-                  "description": "(create) Platform version"
+                  "description": "(create) 1C:Enterprise PLATFORM runtime version of the new project, e.g. 8.3.27 - not the extension's own product version. Omit to inherit the base project's runtime version"
                 },
                 "configuration_name": {
                   "type": "string",
@@ -173,7 +173,7 @@ public class ExtensionManageTool extends AbstractTool {
             } catch (MetadataOperationException e) {
                 return ToolResult.failure(toErrorJson(e));
             } catch (Exception e) {
-                return ToolResult.failure("INTERNAL_ERROR: " + e.getMessage()); //$NON-NLS-1$
+                return ToolResult.failure("INTERNAL_ERROR: " + describeCauseChain(e)); //$NON-NLS-1$
             }
         });
     }
@@ -274,6 +274,42 @@ public class ExtensionManageTool extends AbstractTool {
     }
 
     // --- Helpers ---
+
+    /** Cause-chain walks are bounded so a self-referencing chain cannot spin. */
+    private static final int MAX_CAUSE_DEPTH = 25;
+
+    /**
+     * Renders a throwable together with its whole {@code Caused by:} chain.
+     *
+     * <p>EDT's project lifecycle wraps the real failure: the platform throws
+     * {@code LifecycleException("Failed to perform phase INITIALIZATION for context ProjectContext: X")}
+     * and attaches the participant's exception as the cause, logging nothing. Reporting only
+     * {@code getMessage()} therefore threw away the one copy of the root cause that ever reached the
+     * caller and left {@code INTERNAL_ERROR: ...ProjectContext: X} looking like a dead end.</p>
+     */
+    static String describeCauseChain(Throwable error) {
+        if (error == null) {
+            return "unknown error"; //$NON-NLS-1$
+        }
+        StringBuilder out = new StringBuilder(describeOne(error));
+        int guard = 0;
+        Throwable current = error.getCause();
+        while (current != null && guard < MAX_CAUSE_DEPTH) {
+            out.append(" | caused by: ").append(describeOne(current)); //$NON-NLS-1$
+            if (current.getCause() == current) {
+                break;
+            }
+            current = current.getCause();
+            guard++;
+        }
+        return out.toString();
+    }
+
+    private static String describeOne(Throwable error) {
+        String message = error.getMessage();
+        String type = error.getClass().getName();
+        return message == null || message.isBlank() ? type : type + ": " + message; //$NON-NLS-1$
+    }
 
     private String toErrorJson(MetadataOperationException e) {
         JsonObject obj = new JsonObject();

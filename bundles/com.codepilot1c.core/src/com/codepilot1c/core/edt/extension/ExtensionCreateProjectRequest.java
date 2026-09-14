@@ -2,7 +2,9 @@ package com.codepilot1c.core.edt.extension;
 
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.ConfigurationExtensionPurpose;
@@ -48,16 +50,48 @@ public record ExtensionCreateProjectRequest(
             }
         }
         if (version != null && !version.isBlank()) {
-            try {
-                Version.create(version.trim());
-            } catch (RuntimeException e) {
-                throw new MetadataOperationException(
-                        MetadataOperationCode.INVALID_PROPERTY_VALUE,
-                        "Invalid version: " + version, false); //$NON-NLS-1$
-            }
+            parseSupportedPlatformVersion(version);
         }
         effectivePurpose();
         effectiveCompatibilityMode();
+    }
+
+    /**
+     * Parses the {@code version} parameter as a 1C:Enterprise <em>platform runtime</em> version and
+     * rejects anything the installed EDT cannot run.
+     *
+     * <p>The platform writes this value into {@code DT-INF/PROJECT.PMF} as {@code Runtime-Version}
+     * and then starts the new project context against it. A syntactically valid but unsupported
+     * value (the classic case: the extension's own product version, e.g. {@code 1.0.0}) is accepted
+     * by {@link Version#create(String)} and only blows up much later, inside the platform's
+     * {@code INITIALIZATION} lifecycle phase, where the rollback handler masks the real cause. So the
+     * value has to be rejected here, before {@code IExtensionProjectManager.create} is ever called.</p>
+     *
+     * @param raw the raw {@code version} parameter, never {@code null} or blank
+     * @return the parsed supported platform version
+     * @throws MetadataOperationException when the value is not a supported platform runtime version
+     */
+    public static Version parseSupportedPlatformVersion(String raw) {
+        String trimmed = raw == null ? "" : raw.trim(); //$NON-NLS-1$
+        Version parsed = null;
+        try {
+            parsed = Version.create(trimmed);
+        } catch (RuntimeException e) {
+            parsed = null;
+        }
+        List<Version> supported = Version.getPlatformSupportVersions();
+        if (parsed == null || !supported.contains(parsed)) {
+            throw new MetadataOperationException(
+                    MetadataOperationCode.INVALID_PROPERTY_VALUE,
+                    "Unsupported platform version: " + trimmed //$NON-NLS-1$
+                            + ". 'version' is the 1C:Enterprise platform runtime version of the new" //$NON-NLS-1$
+                            + " extension project (for example 8.3.27), not the extension's own" //$NON-NLS-1$
+                            + " product version. Omit it to inherit the base project's runtime" //$NON-NLS-1$
+                            + " version. Supported: " //$NON-NLS-1$
+                            + supported.stream().map(Version::toString).collect(Collectors.joining(", ")), //$NON-NLS-1$
+                    false);
+        }
+        return parsed;
     }
 
     public String normalizedBaseProjectName() {
@@ -86,7 +120,7 @@ public record ExtensionCreateProjectRequest(
         if (version == null || version.isBlank()) {
             return fallback != null ? fallback : Version.LATEST;
         }
-        return Version.create(version.trim());
+        return parseSupportedPlatformVersion(version);
     }
 
     public ConfigurationExtensionPurpose effectivePurpose() {

@@ -29,6 +29,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.codepilot1c.core.edt.BmObjectHelper;
+import com.codepilot1c.core.edt.ast.EdtServiceGateway;
+import com.codepilot1c.core.edt.ast.ProjectReadinessChecker;
 import com.codepilot1c.core.edt.metadata.EdtMetadataGateway;
 import com.codepilot1c.core.edt.metadata.MetadataOperationCode;
 import com.codepilot1c.core.edt.metadata.MetadataOperationException;
@@ -39,13 +41,19 @@ import com.codepilot1c.core.edt.metadata.MetadataOperationException;
 public class EdtExtensionService {
 
     private final EdtMetadataGateway gateway;
+    private final ExtensionWorkspaceReadinessGuard readinessGuard;
 
     public EdtExtensionService() {
         this(new EdtMetadataGateway());
     }
 
     EdtExtensionService(EdtMetadataGateway gateway) {
+        this(gateway, new ExtensionWorkspaceReadinessGuard(new ProjectReadinessChecker(new EdtServiceGateway())));
+    }
+
+    EdtExtensionService(EdtMetadataGateway gateway, ExtensionWorkspaceReadinessGuard readinessGuard) {
         this.gateway = gateway;
+        this.readinessGuard = readinessGuard;
     }
 
     public ExtensionAdoptObjectResult adoptObject(ExtensionAdoptObjectRequest request) {
@@ -244,6 +252,12 @@ public class EdtExtensionService {
                     MetadataOperationCode.PROJECT_NOT_FOUND,
                     "Base project is not a V8 project: " + baseProjectName, false); //$NON-NLS-1$
         }
+
+        // A create that fails while the workspace is still starting drags the whole workspace into a
+        // CLEAN_IMPORT (see ExtensionWorkspaceReadinessGuard), so never enter that window.
+        readinessGuard.ensureWorkspaceInitialized(
+                baseProject,
+                baseProject.getWorkspace().getRoot().getProjects());
 
         Version version = request.effectiveVersion(baseV8Project.getVersion());
         Path defaultContainer = Path.of(baseProject.getLocation().toOSString()).getParent();

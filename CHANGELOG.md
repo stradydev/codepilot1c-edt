@@ -68,6 +68,52 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`__COMMIT__`)
+
+Reported as a critical, 100 %-reproducible platform defect (feedback
+`2026-09-11-extension-manage-create-internal-error-project-context.md`): every `create` died inside the
+platform's `INITIALIZATION` phase, the caller got `INTERNAL_ERROR: … ProjectContext: MCPApi`, and the
+Eclipse log showed only a secondary `IllegalArgumentException: The 'project' argument cannot be 'null'`
+thrown by the rollback. Four candidates — path location, a poisoned name, accumulated process state,
+compatibility mode — had been excluded by experiment. A fifth was never varied: **`version=1.0.0` was
+passed on all six attempts.**
+
+`version` is the 1C:Enterprise **platform runtime** version of the new project, not the extension's own
+product version. `Version.create("1.0.0")` happily returns a `Version`, so it passed our validation,
+reached `IExtensionProjectManager.create`, was written into `DT-INF/PROJECT.PMF` as `Runtime-Version`
+and killed the project context on start. The same workspace created the same extension from the EDT
+wizard 11 minutes later without trouble — the wizard only offers real platform versions.
+`ExtensionCreateProjectRequest` now rejects anything outside `Version.getPlatformSupportVersions()`
+(8.3.8 … 8.5.1) with a message that says what the parameter means, and the schema description says it
+too instead of the bare "(create) Platform version" that invited the mistake. Because
+`edt_validate_request` runs the same `validate()`, the bad value is now refused before a token is even
+issued.
+
+The masking was ours as well. Disassembling `ServicesOrchestrator` shows the platform *does* chain the
+cause: it throws `LifecycleException("Failed to perform phase INITIALIZATION for context …", cause)`
+and logs nothing (`continueOnFail=false`). `ExtensionManageTool` reported `e.getMessage()` only, which
+discarded the single copy of the root cause that ever reached a caller — hence the note's (reasonable,
+but wrong) conclusion that nothing was chained. The tool now renders the full `caused by` chain,
+bounded against cause cycles.
+
+Third, the blast radius (§1 of the note, the part rated above the failure itself). When a failed
+`create` deletes the half-made project while `DefaultContextsStartJob` is still starting the workspace,
+the start job trips over the vanished resource and `CLEAN_IMPORT`s **every** project, wiping the base
+project's bound-infobase application records on the way. `ExtensionWorkspaceReadinessGuard` now refuses
+to enter that window: the base project must be `READY` and no workspace project may be `BUILDING`,
+using `ProjectReadinessChecker` — the very probe `get_workspace_state` reports as `index.is_indexing`.
+A cold EDT (`NOT_AVAILABLE`) is blocked too; a non-EDT sibling and a probe that itself throws are not,
+so the tool cannot wedge shut. The refusal is `PROJECT_NOT_READY`, `recoverable:true`.
+
+Not fixed, and not fixable from here: the platform's own two defects. `stopProject` still asserts on a
+`null` `IDtProject` inside `cleanUpProjectContext` (`AbstractDependentProjectManager:289`), and the
+`Stale DD provider` leak between attempts is likewise platform-side. Both are cosmetic once the cause
+chain is visible, but they belong to 1C.
+
+`ExtensionCreateProjectVersionTest` 5/5, `ExtensionWorkspaceReadinessGuardTest` 6/6,
+`ExtensionManageToolCauseChainTest` 4/4. Live validation on a real EDT is still pending (no MCP
+endpoint in that session), so the guard has not yet been seen firing on a genuinely cold workspace.
+
 ### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder (`10c5c2e`)
 
 Reported as "`dissociate` deletes the EDT registry entry and `bind` cannot restore it" (feedback
