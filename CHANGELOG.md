@@ -68,7 +68,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-35 (2026-09-16) — `Constant.type` (and every other `TypeDescription` containment reference) could not resolve a primitive type
+### Round-35 (2026-09-16) — `Constant.type` (and every other `TypeDescription` containment reference) could not resolve a primitive type (`006ba70`)
 
 Reported via the inter-agent bus (BF-14128, extension `MCPapi`) and already on file as case 6 of
 `codepilot1c-feedback/2026-07-21-bm-api-cannot-author-composite-containment-metadata.md`: creating a
@@ -102,7 +102,7 @@ which resolves in the plain Maven test bundle (see that file's own note).
 existing plus new unit suite (21 tests touching this area) passes. Flagged for the next sandbox round:
 retry the exact case-6 repro (`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
 
-### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right
+### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right (`5a97b8b`)
 
 Reported via the bus (BF-13180): adopting a base-configuration object into an extension via
 `edt_validate_request` required, on the first attempt(s), discovering by trial that the top-level
