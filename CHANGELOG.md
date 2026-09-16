@@ -11,7 +11,9 @@ commit hash in parentheses where useful.
 
 ### Live validation on builds `0.1.7.20260916-1113` and `-1248` (2026-09-16)
 
-Both confirmations below were first made on `-1113` and then **re-confirmed on the shipped
+All three fixes of this batch are now live-validated.
+
+The first two confirmations below were first made on `-1113` and then **re-confirmed on the shipped
 `0.1.7.20260916-1248`** after the operator installed it (`get_workspace_state` reports that version on a
 fresh pid): the `extension_manage` refusal returns the same new wording, and a second bare constant
 `Constant.WaveR37ConstB` took `{"type":{"types":["String"]}}` — a different primitive — with
@@ -34,19 +36,36 @@ are present in `com.codepilot1c.core_0.1.7.20260916-1113.jar`, `CONNECTION_STRIN
 * **CONFIRMED — Round-34b (`5a97b8b`), extension mismatch message.** `edt_validate_request` for
   `extension_manage adopt` with a deliberate `project`/`base_project` mismatch returned the new text
   verbatim, and the live tool definition serves the tightened schema descriptions.
-* **Still pending — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`.** The build carrying it
-  (`0.1.7.20260916-1248`, `mvn -B -Plocal-target -DskipTests clean verify`, full reactor incl. the
-  update site) was installed by the operator later the same session and is confirmed live —
-  `get_workspace_state` reports `0.1.7.20260916-1248` on a new pid, and the installed jar contains all
-  three markers. It still cannot be validated **here**: `manage_leases` on the sandbox answers
-  `lease_disabled` (no `CODEPILOT1C_LEASE_DIR`), and the sandbox's bound infobase is file-kind while the
-  bug is specific to a server-kind `Srvr="…";Ref="…";` identity. Worse, a tool `take` → tool `release`
-  round-trip would not discriminate even with leases enabled: the old code wrapped identically on both
-  sides, so it cancelled itself out — that is precisely why the regression test drives the take side
-  through `InfobaseLeaseGuard.checkOrAcquire`. A live test therefore needs a lease-enabled stack **and**
-  the auto-claim path (`connect_infobase`/`update_infobase` against a server infobase), which is
-  `infra-BF-14128`'s own setup; handed to them on the bus rather than reproduced by stepping onto a
-  claimed stack.
+* **CONFIRMED — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`**, on stack-1 by
+  `infra-BF-14128` (the reporter), on build `0.1.7.20260916-1248`. This one could not be validated on
+  the sandbox at all: `manage_leases` there answers `lease_disabled` (no `CODEPILOT1C_LEASE_DIR` —
+  leases are a stack-pool feature) and its bound infobase is file-kind, while the bug is specific to a
+  server-kind identity. Nor would a tool `take` → tool `release` round-trip discriminate even with
+  leases enabled — the old code wrapped identically on both sides and cancelled its own bug out, which
+  is exactly why the regression test drives the take side through `InfobaseLeaseGuard.checkOrAcquire`.
+
+  The subject was a **real orphaned production lease** left in the pool on 2026-09-11 by the auto-claim
+  path — the very lease whose release had been failing. Its record is itself corroboration independent
+  of any run: it stored `ib_identity` as the raw `Srvr="10.23.1.10";Ref="BF-12442_BF-13761";`, whereas a
+  file-kind lease in the same directory stores `File="C:\…\Branches\BF-14193";` — so the old `release`,
+  wrapping that raw value in a second `File="…";` layer, could never produce the `srvr__…` key the lease
+  was filed under. Results: `status` listed it (`own:true`, holder pid 127788, dead) → `release` with
+  that exact `ib_path` returned `released:true`, **with no `force`** despite the dead holder → `status`
+  no longer listed it. A second server-kind lease
+  (`Srvr="bastion-stage.erpdev.team";Ref="BF-12442_BF-13761";`) released the same way, and
+  `Get-StackState -Stack stack-1` dropped to `lease.state="none"`. Verified independently of the
+  reporter's account: both `srvr__*.json` files are gone from
+  `C:\1C\Dudko\ClaudeAgents\leases\am`, with the unrelated stack-3 file-kind lease untouched.
+
+  **Not a plugin regression, though it looked like one.** Between the relaunch and this run, stack-1
+  reported `lease_disabled` and it was filed as a regression from this very fix — the timeline fit
+  perfectly (same port, same tool, fine before the redeploy, broken after). It was the restart, not the
+  bytes: `InfobaseLeaseGuard` resolves enablement from `System.getenv(CODEPILOT1C_LEASE_DIR)`, so an EDT
+  relaunched outside the stack's launcher comes up with leases off on any build. Settled by comparing
+  the two installed jars class-by-class — `InfobaseLeaseGuard.class` and `InfobaseLeaseStore.class` are
+  **byte-identical** across `-1113` and `-1248`; only `ManageLeasesTool.class` differs, and nowhere near
+  the enablement gate. A relaunch through `Start-Stack.ps1 -Stack stack-1 -Restart` (operator-run;
+  `[env]` line confirming `LEASE_DIR`) restored it.
 
 ### Round-36 (2026-09-16) — `manage_leases release` always failed for a server-kind `ib_path`
 
@@ -98,7 +117,14 @@ sandbox has been serving those two fixes all along (see the live-validation sect
 genuinely true for **this** round only — `6c259be` was authored at 14:07 local, the installed build's
 qualifier is `20260916-1113` = 11:13 **UTC** = 13:13 local, and grepping the installed
 `com.codepilot1c.core_0.1.7.20260916-1113.jar` confirms `ManageLeasesTool` carries no
-`CONNECTION_STRING_SHAPE`. Round-36 therefore still needs a redeploy to validate live.
+`CONNECTION_STRING_SHAPE`. Round-36 therefore still needed a redeploy to validate live.
+
+**LIVE-VALIDATED** later the same day on `0.1.7.20260916-1248`, by `infra-BF-14128` on stack-1 — the
+reporter, since the sandbox structurally cannot host this test. Against the real orphaned production
+lease this bug had been failing on: `release` with the raw `Srvr="10.23.1.10";Ref="BF-12442_BF-13761";`
+returned `released:true` with no `force`, and the lease left both `status` and the pool directory. Full
+account, including the `lease_disabled` false alarm that preceded it, in the live-validation section at
+the top of this file.
 
 ### Live validation on build `0.1.7.20260810-1011` (2026-08-10)
 
