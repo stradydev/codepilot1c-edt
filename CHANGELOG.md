@@ -68,6 +68,40 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
+### Round-35 (2026-09-16) — `Constant.type` (and every other `TypeDescription` containment reference) could not resolve a primitive type
+
+Reported via the inter-agent bus (BF-14128, extension `MCPapi`) and already on file as case 6 of
+`codepilot1c-feedback/2026-07-21-bm-api-cannot-author-composite-containment-metadata.md`: creating a
+bare `Constant` succeeded, but setting its `<type>` to `Boolean`/`String`/`Number`/`Date` failed
+identically across every payload shape with `[INVALID_PROPERTY_VALUE] Type not found for type:
+<Primitive>` — even though `edt_field_type_candidates` confirmed each name was a valid candidate.
+
+**Root cause.** `Constant` deliberately does not implement `BasicFeature` (it has its own `getType()`
+via a different interface lineage), so `setFeatureValue`'s `BasicFeature`-only special case for
+`"type"` never fires for it. A plain `Constant.type` set instead falls through the generic
+`applyReferenceValue` → `applyTypeDescriptionReference` path — the same one `DefinedType.type` and a
+command's `commandParameterType` already used. That path resolved types through
+`resolveTypeItemInCurrentNamespace` **alone**, which only finds BM `Type` top/contained objects.
+User-defined reference types (`CatalogRef.Foo`) register there; primitive types do not, so every one of
+them failed loud regardless of which containment reference asked for it — not a `Constant`-specific gap,
+and not `Boolean`-specific either.
+
+**The fix:** `applyTypeDescriptionReference` now resolves through the same three-rung fallback ladder
+`setAttributeType` already used for `BasicFeature`s, adapted for a target that isn't one: the BM
+namespace lookup first, then the xtext `TypeProviderService` scoping route (knows platform primitives
+and built-ins even on a fresh project), then a configuration scan for a simple/built-in type already
+used elsewhere. A candidate from the latter two — a separate EMF view from the live write transaction —
+is mapped onto it via `toTransactionObject` before being written, the same safeguard
+`resolveAttributeTypeItemInTransaction` already applies on the `BasicFeature` side.
+
+Tests: `CompositeTypeContractTest` gains three source-contract cases pinning the new resolver and its
+transaction-mapping step — this area needs a live BM transaction and the EDT metamodel, neither of
+which resolves in the plain Maven test bundle (see that file's own note).
+
+**Live validation pending** — no EDT instance was reachable from this session; the fix compiles and the
+existing plus new unit suite (21 tests touching this area) passes. Flagged for the next sandbox round:
+retry the exact case-6 repro (`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
+
 ### Round-34 (2026-09-14) — the configuration root had no address at all (`d8bbf65`)
 
 Reported as a medium blocker (feedback

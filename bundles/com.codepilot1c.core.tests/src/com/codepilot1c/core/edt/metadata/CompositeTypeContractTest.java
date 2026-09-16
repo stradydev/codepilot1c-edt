@@ -225,6 +225,64 @@ public class CompositeTypeContractTest {
         assertTrue(builder.contains("qualifierDefaults || hasDateQualifierInput(typeSpec, existingType)")); //$NON-NLS-1$
     }
 
+    // --- Constant.type / DefinedType primitive-type resolution (BF-14128 case 6) ---
+
+    /**
+     * {@code Constant} does not implement {@code BasicFeature} (unlike Dimension/Attribute/
+     * Resource/Requisite), so {@code setFeatureValue}'s {@code BasicFeature}-only special case for
+     * {@code "type"} never fires for it; a plain {@code Constant.type} set falls through to
+     * {@code applyReferenceValue} -> {@code applyTypeDescriptionReference} instead, the same path
+     * used for {@code DefinedType.type} and a command's {@code commandParameterType}. That path used
+     * to resolve types through {@code resolveTypeItemInCurrentNamespace} ALONE, which only finds BM
+     * {@code Type} top/contained objects — user-defined reference types like {@code CatalogRef.Foo}
+     * register there, but String/Number/Date/Boolean do not, so every primitive type failed with a
+     * hard {@code INVALID_PROPERTY_VALUE} ("Type not found for type: Boolean") even though
+     * {@code edt_field_type_candidates} confirmed the type name was valid.
+     */
+    @Test
+    public void typeDescriptionReferenceResolutionFallsThroughToTheSameLaddersAsBasicFeature() {
+        String source = readSource(SERVICE_PATH);
+        String body = methodBody(source, "private void applyTypeDescriptionReference("); //$NON-NLS-1$
+        assertTrue("must delegate to the multi-fallback resolver, not call the namespace-only " //$NON-NLS-1$
+                        + "lookup directly", //$NON-NLS-1$
+                body.contains("resolveTypeDescriptionReferenceTypeItem(")); //$NON-NLS-1$
+        assertFalse("resolveTypeItemInCurrentNamespace alone is exactly the primitive-type gap " //$NON-NLS-1$
+                        + "(BF-14128 case 6) — it must not be called directly from here any more", //$NON-NLS-1$
+                body.contains("resolveTypeItemInCurrentNamespace(transaction, target, typeSpec, null)")); //$NON-NLS-1$
+
+        String resolverBody = methodBody(source, "private TypeItem resolveTypeDescriptionReferenceTypeItem("); //$NON-NLS-1$
+        assertTrue("the BM-namespace lookup must still be tried first (cheapest, most common hit)", //$NON-NLS-1$
+                resolverBody.contains("resolveTypeItemInCurrentNamespace(transaction, target, typeSpec, null)")); //$NON-NLS-1$
+        assertTrue("the xtext TypeProviderService route must be a fallback — it is what knows " //$NON-NLS-1$
+                        + "platform primitives/built-ins even on a fresh project", //$NON-NLS-1$
+                resolverBody.contains("resolveTypeItemViaTypeProvider(target, reference, configuration, " //$NON-NLS-1$
+                        + "typeSpec.typeQuery())")); //$NON-NLS-1$
+        assertTrue("the configuration-scan fallback must run too, same as the BasicFeature ladder", //$NON-NLS-1$
+                resolverBody.contains("resolveSimpleTypeItemFromConfiguration(configuration, " //$NON-NLS-1$
+                        + "typeSpec.typeQuery())")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aTypeProviderOrConfigurationScanCandidateIsMappedIntoTheWriteTransaction() {
+        String source = readSource(SERVICE_PATH);
+        String resolverBody = methodBody(source, "private TypeItem resolveTypeDescriptionReferenceTypeItem("); //$NON-NLS-1$
+        // Unlike the namespace lookup (already transaction-bound by construction), the type-provider
+        // and configuration-scan results come from a separate EMF view and must be re-homed onto the
+        // live write transaction before being written into a containment feature — an unmapped
+        // cross-transaction TypeItem would be a detached-object bug, not just a resolution gap.
+        assertTrue("a provider/config-scan candidate must be mapped via toTransactionObject", //$NON-NLS-1$
+                resolverBody.contains("transaction.toTransactionObject(candidate)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void applyTypeDescriptionReferenceNowThreadsConfigurationToTheResolver() {
+        String source = readSource(SERVICE_PATH);
+        assertTrue("applyReferenceValue must pass configuration down to the type-description path " //$NON-NLS-1$
+                        + "so the configuration-scan fallback has something to scan", //$NON-NLS-1$
+                source.contains("applyTypeDescriptionReference(configuration, target, reference, value, " //$NON-NLS-1$
+                        + "transaction)")); //$NON-NLS-1$
+    }
+
     // --- Helpers ------------------------------------------------------------
 
     private int countOccurrences(String haystack, String needle) {

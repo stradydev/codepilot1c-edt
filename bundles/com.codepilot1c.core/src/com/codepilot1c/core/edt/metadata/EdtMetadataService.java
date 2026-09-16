@@ -13257,7 +13257,7 @@ public class EdtMetadataService {
             // StandardCommand.commandParameterType): not a child object but a type set, so
             // build a fresh TypeDescription from the requested type(s) instead of rejecting it.
             if (isTypeDescriptionReference(reference)) {
-                applyTypeDescriptionReference(target, reference, value, transaction);
+                applyTypeDescriptionReference(configuration, target, reference, value, transaction);
                 return;
             }
             // ExchangePlan.content: containment, but its entries are not child objects — see
@@ -13458,6 +13458,7 @@ public class EdtMetadataService {
      * none.</p>
      */
     private void applyTypeDescriptionReference(
+            Configuration configuration,
             MdObject target,
             EReference reference,
             Object value,
@@ -13468,7 +13469,8 @@ public class EdtMetadataService {
                 currentTypeDescription(target, reference),
                 false,
                 typeSpec -> {
-                    TypeItem typeItem = resolveTypeItemInCurrentNamespace(transaction, target, typeSpec, null);
+                    TypeItem typeItem = resolveTypeDescriptionReferenceTypeItem(
+                            configuration, target, reference, transaction, typeSpec);
                     if (typeItem == null) {
                         throw new MetadataOperationException(
                                 MetadataOperationCode.INVALID_PROPERTY_VALUE,
@@ -13479,6 +13481,64 @@ public class EdtMetadataService {
                     return new ResolvedTypeItem(typeItem, typeItem);
                 });
         target.eSet(reference, built.description());
+    }
+
+    /**
+     * Resolves a {@code TypeDescription}-valued containment reference (e.g. {@code DefinedType.type},
+     * {@code Constant.type}, a command's {@code commandParameterType}) to a {@link TypeItem}.
+     *
+     * <p>{@code target} for these references is never a {@link BasicFeature} — {@code Constant} in
+     * particular deliberately does not implement it — so this cannot reuse
+     * {@link #resolveTypeItemForFeature}. It runs the same fallback chain by hand: a BM namespace
+     * lookup first (covers user-defined reference types like {@code CatalogRef.Foo}, which are
+     * registered as BM {@code Type} objects), then the xtext {@code TypeProviderService} scoping
+     * route (knows platform primitives and built-ins even on a fresh project), then a configuration
+     * scan for a simple/platform-built-in type already used elsewhere. Without the last two, every
+     * primitive type (String/Number/Date/Boolean) failed here with a hard
+     * {@code INVALID_PROPERTY_VALUE} because primitives are not BM {@code Type} top objects
+     * (BF-14128, case 6 of the 2026-07-21 containment-metadata feedback note).</p>
+     *
+     * <p>The namespace lookup already returns a type bound to {@code transaction} (it only ever
+     * reads through {@code transaction}/{@code target}'s own BM transaction). The other two
+     * fallbacks come from a separate EMF view (xtext scoping / a plain {@code eAllContents} walk of
+     * {@code configuration}), so their result is mapped onto {@code transaction} the same way
+     * {@link #resolveAttributeTypeItemInTransaction} does for a {@link BasicFeature} before being
+     * handed back — an unmapped cross-transaction {@link TypeItem} written into a live edit would be
+     * a detached-object bug, not just a resolution gap.</p>
+     */
+    private TypeItem resolveTypeDescriptionReferenceTypeItem(
+            Configuration configuration,
+            MdObject target,
+            EReference reference,
+            IBmPlatformTransaction transaction,
+            TypeSpec typeSpec
+    ) {
+        TypeItem fromNamespace = resolveTypeItemInCurrentNamespace(transaction, target, typeSpec, null);
+        if (fromNamespace != null) {
+            return fromNamespace;
+        }
+        TypeItem candidate = resolveTypeItemViaTypeProvider(target, reference, configuration, typeSpec.typeQuery());
+        if (candidate == null) {
+            candidate = resolveSimpleTypeItemFromConfiguration(configuration, typeSpec.typeQuery());
+        }
+        if (candidate == null) {
+            return null;
+        }
+        try {
+            TypeItem txTypeItem = transaction.toTransactionObject(candidate);
+            if (txTypeItem != null) {
+                return txTypeItem;
+            }
+        } catch (RuntimeException e) {
+            LOG.debug("resolveTypeDescriptionReferenceTypeItem: toTransactionObject failed for type=%s: %s", //$NON-NLS-1$
+                    typeSpec.typeQuery(),
+                    e.getMessage());
+        }
+        TypeItem reNamespaced = resolveTypeItemInCurrentNamespace(transaction, target, typeSpec, candidate);
+        if (reNamespaced != null) {
+            return reNamespaced;
+        }
+        return candidate;
     }
 
     /** The TypeDescription currently held by {@code reference}, or {@code null} if unset. */
