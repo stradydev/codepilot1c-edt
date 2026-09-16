@@ -262,7 +262,8 @@ public class MetadataRequestValidationService {
         if (!projectName.equals(effectiveBaseProject)) {
             throw new MetadataOperationException(
                     MetadataOperationCode.KNOWLEDGE_REQUIRED,
-                    "payload.base_project must match project", false); //$NON-NLS-1$
+                    "payload.base_project must match project - both must be the BASE configuration " //$NON-NLS-1$
+                            + "project the extension attaches to, not the extension project", false); //$NON-NLS-1$
         }
 
         com.codepilot1c.core.edt.extension.ExtensionCreateProjectRequest request =
@@ -388,7 +389,8 @@ public class MetadataRequestValidationService {
         if (!projectName.equals(effectiveBaseProject)) {
             throw new MetadataOperationException(
                     MetadataOperationCode.KNOWLEDGE_REQUIRED,
-                    "payload.base_project must match project", false); //$NON-NLS-1$
+                    "payload.base_project must match project - both must be the BASE configuration " //$NON-NLS-1$
+                            + "project the extension attaches to, not the extension project", false); //$NON-NLS-1$
         }
         com.codepilot1c.core.edt.extension.ExtensionAdoptObjectRequest request =
                 new com.codepilot1c.core.edt.extension.ExtensionAdoptObjectRequest(
@@ -424,7 +426,8 @@ public class MetadataRequestValidationService {
         if (!projectName.equals(effectiveBaseProject)) {
             throw new MetadataOperationException(
                     MetadataOperationCode.KNOWLEDGE_REQUIRED,
-                    "payload.base_project must match project", false); //$NON-NLS-1$
+                    "payload.base_project must match project - both must be the BASE configuration " //$NON-NLS-1$
+                            + "project the extension attaches to, not the extension project", false); //$NON-NLS-1$
         }
 
         com.codepilot1c.core.edt.extension.ExtensionSetPropertyStateRequest request =

@@ -49,11 +49,11 @@ public class ExtensionManageTool extends AbstractTool {
                 },
                 "project": {
                   "type": "string",
-                  "description": "Base EDT project name. Required by create, adopt and set_state - each rejects a missing project - and must equal base_project; list_projects and list_objects ignore it"
+                  "description": "Base EDT project name - the BASE configuration project the extension attaches to, never the extension project itself, even for adopt/set_state which mutate the extension. Required by create, adopt and set_state - each rejects a missing project - and must equal base_project; list_projects and list_objects ignore it"
                 },
                 "base_project": {
                   "type": "string",
-                  "description": "Base configuration project name"
+                  "description": "Base configuration project name - same project as the top-level 'project', repeated here; both must match exactly"
                 },
                 "extension_project": {
                   "type": "string",

@@ -102,6 +102,27 @@ which resolves in the plain Maven test bundle (see that file's own note).
 existing plus new unit suite (21 tests touching this area) passes. Flagged for the next sandbox round:
 retry the exact case-6 repro (`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
 
+### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right
+
+Reported via the bus (BF-13180): adopting a base-configuration object into an extension via
+`edt_validate_request` required, on the first attempt(s), discovering by trial that the top-level
+`project`, `payload.project` and `payload.base_project` must all name the **base** configuration
+project — never the extension project being adopted into. A mismatch (e.g. `project`/`base_project` set
+to the extension's own name) already raised a specific `KNOWLEDGE_REQUIRED /
+payload.base_project must match project`, but the message named the mismatch without saying which of
+the two values was the correct one.
+
+**Fix:** the three extension-specific mismatch messages (`normalizeExtensionAdoptPayload`,
+`normalizeExtensionCreateProjectPayload`, `normalizeExtensionSetPropertyStatePayload`) now spell out
+"both must be the BASE configuration project the extension attaches to, not the extension project";
+`extension_manage`'s own `project`/`base_project` schema descriptions were tightened the same way.
+`edt_validate_request`'s own generic `project` parameter was left untouched — it fronts `dcs_manage`
+and `external_manage` too, where no such base/extension distinction exists.
+
+Tests: `ExtensionAdoptPayloadValidationTest` (new) — behavioural, not source-scan: the normalizer needs
+no live EDT project, so the match/mismatch/default-base-project/blank-fqn cases run as plain unit tests
+against the real method.
+
 ### Round-34 (2026-09-14) — the configuration root had no address at all (`d8bbf65`)
 
 Reported as a medium blocker (feedback
