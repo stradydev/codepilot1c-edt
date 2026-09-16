@@ -9,6 +9,38 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-36 (2026-09-16) — `manage_leases release` always failed for a server-kind `ib_path`
+
+Reported via the bus (infra-BF-14128): a stack whose only remaining leases were server-kind
+(`Srvr="...";Ref="...";`, as opposed to a file-kind bare path) could not release them —
+`release(ib_path=<the exact string status just echoed>)` always answered
+`{released:false, note:"no lease was held for this branch"}`, contradicting `status`'s own
+`own:true` for the identical lease. Blocked clean stack teardown/park.
+
+**Root cause:** `ManageLeasesTool.take`/`release` unconditionally wrapped `ib_path` as
+`File="<ib_path>";` before handing it to `InfobaseIdentity.canonical`, on the assumption that
+`ib_path` is always a bare file path (its own schema said so). But a server-kind lease is
+auto-taken by `connect_infobase`/`update_infobase` via `InfobaseLeaseGuard.checkOrAcquire` with the
+RAW connection string as the identity — never wrapped — and `status` echoes that raw string back as
+`ib_path`. Re-wrapping an already-`Token="...";`-shaped string in a second `File="...";` layer
+breaks `canonical`'s regex (it matches the FIRST quoted token, truncating the nested string to
+`file:srvr=`), so `release`'s computed key never matched the one `take` actually stored under.
+`take`'s own identical wrapping masked the bug for any lease acquired *through the tool itself*
+(both sides wrapped the same way, canceling out) — only the take-via-auto-claim /
+release-via-explicit-tool combination, the real production path, exposed it.
+
+**Fix:** both `take` and `release` now detect whether `ib_path` already has connection-string shape
+(`Token="value";...`) and pass it through unchanged in that case, falling back to the old
+`File="...";` wrap only for a bare path. Schema description updated to say the field also accepts a
+full connection string, pasted back exactly as `status` echoed it.
+
+Tests: `ManageLeasesToolTest` gains two cases — a bare-file-path release regression guard (the
+existing suite never actually exercised `release`'s own `ib_path` branch) and a server-kind
+round-trip that reproduces the real seam (`InfobaseLeaseGuard.checkOrAcquire` auto-take with the raw
+identity, then a tool-mediated `release`) rather than routing both ends through the tool, which
+would have let the old bug cancel itself out. Live validation on the standalone sandbox in progress
+this session — see the plugin-side commit/session notes for the outcome.
+
 ### Live validation on build `0.1.7.20260810-1011` (2026-08-10)
 
 The owner's redeploy put Round-16…26 on the sandbox and the pending checklist was run. Results, stated

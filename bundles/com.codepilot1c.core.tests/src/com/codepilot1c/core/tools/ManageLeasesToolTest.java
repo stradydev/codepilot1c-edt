@@ -173,6 +173,61 @@ public class ManageLeasesToolTest {
     }
 
     @Test
+    public void releaseByBareFileIbPathWorks() {
+        stack3Tool.execute(Map.of("action", "take", "branch", "task-C", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "ib_path", "C:\\db\\task-C")).join(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolResult release = stack3Tool.execute(Map.of("action", "release", //$NON-NLS-1$ //$NON-NLS-2$
+                "ib_path", "C:\\db\\task-C")).join(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("releasing by the same bare file path used at take-time must succeed", //$NON-NLS-1$
+                release.isSuccess());
+        assertTrue(payload(release).get("released").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    /**
+     * Regression for the 2026-09-16 bus report. Reproduces the REAL shape of the bug: a server-kind
+     * lease is auto-taken by {@code connect_infobase}/{@code update_infobase} via
+     * {@link InfobaseLeaseGuard#checkOrAcquire}, which passes the RAW {@code Srvr="...";Ref="...";}
+     * connection string as the identity — never wrapped. An explicit {@code release} through THIS
+     * tool used to wrap whatever {@code ib_path} it was given in a SECOND {@code File="...";} layer
+     * unconditionally, breaking {@code InfobaseIdentity.canonical}'s regex (it matches the FIRST
+     * quoted token, truncating the nested string to garbage) and producing a key that never matched
+     * the one recorded at take-time — so a caller pasting {@code status}'s own {@code ib_path}
+     * straight into {@code release} always got {@code released:false, note:"no lease was held"}
+     * even though {@code status} showed {@code own:true} for the exact same lease.
+     *
+     * <p>Driving {@code take} through {@code ManageLeasesTool} itself here would NOT have caught
+     * this: its old {@code take} wrapped the same way {@code release} did, so the two bugs canceled
+     * each other out. The bug only shows up across the real production seam — a raw-identity
+     * auto-take followed by a tool-mediated release — which is what this test drives.</p>
+     */
+    @Test
+    public void releaseResolvesAServerKindLeaseAutoTakenWithTheRawIdentity() {
+        String serverIbPath = "Srvr=\"10.23.1.10\";Ref=\"BF-12442_BF-13761\";"; //$NON-NLS-1$
+        InfobaseLeaseGuard autoTakeGuard = new InfobaseLeaseGuard(dir, "stack-3", "C:\\ws3"); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseLeaseGuard.Decision decision =
+                autoTakeGuard.checkOrAcquire("task-C", serverIbPath, serverIbPath, "op-1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(InfobaseLeaseGuard.Outcome.ALLOWED, decision.outcome());
+
+        ToolResult status = stack3Tool.execute(Map.of("action", "status")).join(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray leases = payload(status).getAsJsonArray("leases"); //$NON-NLS-1$
+        assertEquals(1, leases.size());
+        JsonObject lease = leases.get(0).getAsJsonObject();
+        assertTrue("the auto-taken lease must show as owned by this stack", //$NON-NLS-1$
+                lease.get("own").getAsBoolean()); //$NON-NLS-1$
+        String echoedIbPath = lease.get("ib_path").getAsString(); //$NON-NLS-1$
+        assertEquals("status must echo ib_path verbatim, exactly as a caller would copy it back", //$NON-NLS-1$
+                serverIbPath, echoedIbPath);
+
+        // The exact reported failure mode: release using the string status just echoed back.
+        ToolResult release = stack3Tool.execute(Map.of("action", "release", //$NON-NLS-1$ //$NON-NLS-2$
+                "ib_path", echoedIbPath)).join(); //$NON-NLS-1$
+        assertTrue("a server-kind ib_path round-tripped through status must release cleanly", //$NON-NLS-1$
+                release.isSuccess());
+        assertTrue(payload(release).get("released").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    @Test
     public void releaseWithAmbiguousBranchDemandsIbPath() {
         stack3Tool.execute(Map.of("action", "take", "branch", "task-C", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "ib_path", "C:\\db\\A")).join(); //$NON-NLS-1$ //$NON-NLS-2$

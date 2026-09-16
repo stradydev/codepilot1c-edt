@@ -12,8 +12,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 
 import com.codepilot1c.core.edt.runtime.EdtToolErrorCode;
+import com.codepilot1c.core.edt.runtime.InfobaseIdentity;
 import com.codepilot1c.core.edt.runtime.lease.InfobaseLease;
 import com.codepilot1c.core.edt.runtime.lease.InfobaseLeaseGuard;
 import com.codepilot1c.core.edt.runtime.lease.InfobaseLeaseStore;
@@ -42,6 +44,9 @@ public class ManageLeasesTool extends AbstractTool {
 
     private static final VibeLogger.CategoryLogger LOG = VibeLogger.forClass(ManageLeasesTool.class);
 
+    /** Matches a 1C connection-string token ({@code File="..."}, {@code Srvr="..."}, ...) at the start. */
+    private static final Pattern CONNECTION_STRING_SHAPE = Pattern.compile("^\\s*[A-Za-z]+\\s*=\\s*\""); //$NON-NLS-1$
+
     private static final String SCHEMA = """
             {
               "type": "object",
@@ -57,7 +62,7 @@ public class ManageLeasesTool extends AbstractTool {
                 },
                 "ib_path": {
                   "type": "string",
-                  "description": "Path of the task's file infobase. take: keys the lease by the PHYSICAL infobase (recommended) — all branches of that infobase share one lease. release: resolves the lease by infobase when branch alone is ambiguous."
+                  "description": "The task's infobase: a bare file path (e.g. 'C:\\\\...\\\\Branches\\\\BF-1234'), or a full connection string for a non-file infobase (e.g. 'Srvr=\"host\";Ref=\"name\";', accepted as-is — pass it exactly as `status` echoed it back, do not re-wrap it). take: keys the lease by the PHYSICAL infobase (recommended) — all branches of that infobase share one lease. release: resolves the lease by infobase when branch alone is ambiguous."
                 },
                 "force": {
                   "type": "boolean",
@@ -157,8 +162,7 @@ public class ManageLeasesTool extends AbstractTool {
                     "branch (or ib_path) is required for action=take")); //$NON-NLS-1$
         }
         InfobaseLeaseStore store = guard.store();
-        InfobaseLease lease = guard.newLease(branch, ibPath, ibPath == null ? null
-                : "File=\"" + ibPath + "\";", opId); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseLease lease = guard.newLease(branch, ibPath, ibIdentityOf(ibPath), opId);
         InfobaseLeaseStore.TakeResult result = force ? store.forceTake(lease) : store.take(lease);
         if (result.taken()) {
             JsonObject payload = basePayload(opId, true);
@@ -208,7 +212,7 @@ public class ManageLeasesTool extends AbstractTool {
         InfobaseLeaseStore store = guard.store();
         String resourceKey;
         if (ibPath != null) {
-            resourceKey = InfobaseLeaseStore.resourceKey("File=\"" + ibPath + "\";", branch); //$NON-NLS-1$ //$NON-NLS-2$
+            resourceKey = InfobaseLeaseStore.resourceKey(ibIdentityOf(ibPath), branch);
         } else {
             // Leases are keyed by infobase identity; a branch names only an attribute, so it may
             // match several leases (one task's phase branches over several IBs). Resolve by scan
@@ -351,5 +355,28 @@ public class ManageLeasesTool extends AbstractTool {
         }
         String s = String.valueOf(value).trim();
         return s.isEmpty() ? null : s;
+    }
+
+    /**
+     * Turns {@code ib_path} into the canonical identity string {@link InfobaseIdentity#canonical}
+     * expects. The tool's {@code ib_path} parameter was originally documented as a bare FILE
+     * infobase path ("Path of the task's file infobase"), so this always wrapped it as
+     * {@code File="<ib_path>";}. But {@code status} echoes {@code ib_path} back as whatever the
+     * lease was actually keyed by — for a server-kind lease (auto-taken by {@code connect_infobase}
+     * with the raw {@code Srvr="...";Ref="...";} connection string) that echoed value is ALREADY a
+     * full connection string, not a bare path. Re-wrapping an already-{@code Token="...";}-shaped
+     * value in a second {@code File="...";} layer breaks {@link InfobaseIdentity#canonical}'s
+     * regex (it matches the FIRST quoted token, so the nested string is truncated to garbage), so a
+     * caller pasting {@code status}'s own output back into {@code release} always got
+     * {@code NOT_HELD} for a server-kind infobase. A bare path never matches
+     * {@code Token="value";} and is wrapped exactly as before.
+     */
+    private static String ibIdentityOf(String ibPath) {
+        if (ibPath == null) {
+            return null;
+        }
+        return CONNECTION_STRING_SHAPE.matcher(ibPath).find()
+                ? ibPath
+                : "File=\"" + ibPath + "\";"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
