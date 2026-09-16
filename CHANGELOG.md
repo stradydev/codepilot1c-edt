@@ -9,7 +9,13 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
-### Live validation on build `0.1.7.20260916-1113` (2026-09-16)
+### Live validation on builds `0.1.7.20260916-1113` and `-1248` (2026-09-16)
+
+Both confirmations below were first made on `-1113` and then **re-confirmed on the shipped
+`0.1.7.20260916-1248`** after the operator installed it (`get_workspace_state` reports that version on a
+fresh pid): the `extension_manage` refusal returns the same new wording, and a second bare constant
+`Constant.WaveR37ConstB` took `{"type":{"types":["String"]}}` — a different primitive — with
+`<types>String</types>` landing in its `.mdo`.
 
 The preceding session reverted a failed hand-redeploy of `workspace-sandbox` and concluded that none of
 its three fixes had ever run live. Two of them had. The `.prebak2` jars its revert restored were built
@@ -28,10 +34,19 @@ are present in `com.codepilot1c.core_0.1.7.20260916-1113.jar`, `CONNECTION_STRIN
 * **CONFIRMED — Round-34b (`5a97b8b`), extension mismatch message.** `edt_validate_request` for
   `extension_manage adopt` with a deliberate `project`/`base_project` mismatch returned the new text
   verbatim, and the live tool definition serves the tightened schema descriptions.
-* **Still pending — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`.** Not in the installed
-  build; needs a redeploy, which is operator-gated after the `bundles.info` incident below. A fresh
-  deployable build carrying all three exists: `0.1.7.20260916-1248` (`mvn -B -Plocal-target -DskipTests
-  clean verify`, full reactor incl. the update site, BUILD SUCCESS).
+* **Still pending — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`.** The build carrying it
+  (`0.1.7.20260916-1248`, `mvn -B -Plocal-target -DskipTests clean verify`, full reactor incl. the
+  update site) was installed by the operator later the same session and is confirmed live —
+  `get_workspace_state` reports `0.1.7.20260916-1248` on a new pid, and the installed jar contains all
+  three markers. It still cannot be validated **here**: `manage_leases` on the sandbox answers
+  `lease_disabled` (no `CODEPILOT1C_LEASE_DIR`), and the sandbox's bound infobase is file-kind while the
+  bug is specific to a server-kind `Srvr="…";Ref="…";` identity. Worse, a tool `take` → tool `release`
+  round-trip would not discriminate even with leases enabled: the old code wrapped identically on both
+  sides, so it cancelled itself out — that is precisely why the regression test drives the take side
+  through `InfobaseLeaseGuard.checkOrAcquire`. A live test therefore needs a lease-enabled stack **and**
+  the auto-claim path (`connect_infobase`/`update_infobase` against a server infobase), which is
+  `infra-BF-14128`'s own setup; handed to them on the bus rather than reproduced by stepping onto a
+  claimed stack.
 
 ### Round-36 (2026-09-16) — `manage_leases release` always failed for a server-kind `ib_path`
 
