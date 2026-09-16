@@ -9,6 +9,30 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Live validation on build `0.1.7.20260916-1113` (2026-09-16)
+
+The preceding session reverted a failed hand-redeploy of `workspace-sandbox` and concluded that none of
+its three fixes had ever run live. Two of them had. The `.prebak2` jars its revert restored were built
+from a working tree that already carried Round-35 and Round-34b; only Round-36, authored after that
+build, was missing. Established by grepping the **installed** jar's class bytes rather than reasoning
+about the revert — `resolveTypeDescriptionReferenceTypeItem` and `both must be the BASE configuration`
+are present in `com.codepilot1c.core_0.1.7.20260916-1113.jar`, `CONNECTION_STRING_SHAPE` is not.
+
+* **CONFIRMED — Round-35 (`006ba70`), `Constant.type` → primitive.** `Constant.WaveR37Const` created
+  bare in `TestConfiguration`, then `update_metadata` `{"set":{"type":{"types":["Boolean"]}}}` — the
+  exact case-6 repro that used to fail `[INVALID_PROPERTY_VALUE] Type not found for type: Boolean`.
+  Read back by result: `edt_metadata_details full=true` shows `TypeDescription
+  (Constant.WaveR37Const.type) — types=[Type.Boolean]`, and the `.mdo` on disk carries
+  `<type><types>Boolean</types></type>`. The probe object is left in place, matching the `Wave*`
+  probes earlier rounds left in that throwaway project.
+* **CONFIRMED — Round-34b (`5a97b8b`), extension mismatch message.** `edt_validate_request` for
+  `extension_manage adopt` with a deliberate `project`/`base_project` mismatch returned the new text
+  verbatim, and the live tool definition serves the tightened schema descriptions.
+* **Still pending — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`.** Not in the installed
+  build; needs a redeploy, which is operator-gated after the `bundles.info` incident below. A fresh
+  deployable build carrying all three exists: `0.1.7.20260916-1248` (`mvn -B -Plocal-target -DskipTests
+  clean verify`, full reactor incl. the update site, BUILD SUCCESS).
+
 ### Round-36 (2026-09-16) — `manage_leases release` always failed for a server-kind `ib_path`
 
 Reported via the bus (infra-BF-14128): a stack whose only remaining leases were server-kind
@@ -48,10 +72,18 @@ anything, and removing the apparently-stale one made the plugin disappear from t
 (confirmed by the operator) rather than making the fresh build active — some part of Equinox/P2's
 bundle resolution here does not follow simple "duplicate lines, highest version wins" semantics.
 Reverted both jars (from `.prebak2` backups) and `bundles.info` back to their exact pre-session
-byte-for-byte state; the operator confirmed the plugin is visible again after a restart. No fix from
-this session ever ran against a live EDT. Left for a future round: understand why the duplicate
-registration existed in the first place and find a redeploy method for this sandbox that does not
-require editing `bundles.info` by hand.
+byte-for-byte state; the operator confirmed the plugin is visible again after a restart. Left for a
+future round: understand why the duplicate registration existed in the first place and find a redeploy
+method for this sandbox that does not require editing `bundles.info` by hand.
+
+**Correction (next session, 2026-09-16).** That session signed off believing "no fix from this session
+ever ran against a live EDT". That was wrong for two of the three: the `.prebak2` jars restored by the
+revert were themselves built from a working tree that already contained Round-35 and Round-34b, so the
+sandbox has been serving those two fixes all along (see the live-validation section above). It is
+genuinely true for **this** round only — `6c259be` was authored at 14:07 local, the installed build's
+qualifier is `20260916-1113` = 11:13 **UTC** = 13:13 local, and grepping the installed
+`com.codepilot1c.core_0.1.7.20260916-1113.jar` confirms `ManageLeasesTool` carries no
+`CONNECTION_STRING_SHAPE`. Round-36 therefore still needs a redeploy to validate live.
 
 ### Live validation on build `0.1.7.20260810-1011` (2026-08-10)
 
@@ -142,12 +174,13 @@ Tests: `CompositeTypeContractTest` gains three source-contract cases pinning the
 transaction-mapping step — this area needs a live BM transaction and the EDT metamodel, neither of
 which resolves in the plain Maven test bundle (see that file's own note).
 
-**Live validation attempted, not completed** — a redeploy into the standalone sandbox went wrong for
-reasons unrelated to this fix itself (see Round-36's note on the `bundles.info` duplicate-registration
-trap this session ran into and had to revert) and never got the fix loaded against a live EDT before
-the sandbox was rolled back to its prior build. The fix compiles and the existing plus new unit suite
-(21 tests touching this area) passes. Flagged for the next sandbox round: retry the exact case-6 repro
-(`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
+**LIVE-VALIDATED** on build `0.1.7.20260916-1113` in `workspace-sandbox` (2026-09-16, next session) —
+the exact case-6 repro now passes: a bare `Constant.WaveR37Const` created in `TestConfiguration`, then
+`update_metadata` with `{"set":{"type":{"types":["Boolean"]}}}` succeeded where it previously failed
+`[INVALID_PROPERTY_VALUE] Type not found for type: Boolean`. Verified by result, not by the success
+string: `edt_metadata_details full=true` reports the child `TypeDescription (Constant.WaveR37Const.type)
+— types=[Type.Boolean]`, and the on-disk `WaveR37Const.mdo` carries `<type><types>Boolean</types></type>`.
+See the live-validation section above for why this build already contained the fix.
 
 ### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right (`5a97b8b`)
 
@@ -169,6 +202,13 @@ and `external_manage` too, where no such base/extension distinction exists.
 Tests: `ExtensionAdoptPayloadValidationTest` (new) — behavioural, not source-scan: the normalizer needs
 no live EDT project, so the match/mismatch/default-base-project/blank-fqn cases run as plain unit tests
 against the real method.
+
+**LIVE-VALIDATED** on build `0.1.7.20260916-1113` in `workspace-sandbox` (2026-09-16, next session) —
+`edt_validate_request` for `extension_manage` `adopt` with `project: TestConfiguration` /
+`base_project: Accounting management` was refused with the new wording verbatim: `KNOWLEDGE_REQUIRED —
+payload.base_project must match project - both must be the BASE configuration project the extension
+attaches to, not the extension project`. The tightened schema descriptions are live too: the tool
+definition served by that instance carries the new `project` / `base_project` texts.
 
 ### Round-34 (2026-09-14) — the configuration root had no address at all (`d8bbf65`)
 
