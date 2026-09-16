@@ -38,8 +38,20 @@ Tests: `ManageLeasesToolTest` gains two cases — a bare-file-path release regre
 existing suite never actually exercised `release`'s own `ib_path` branch) and a server-kind
 round-trip that reproduces the real seam (`InfobaseLeaseGuard.checkOrAcquire` auto-take with the raw
 identity, then a tool-mediated `release`) rather than routing both ends through the tool, which
-would have let the old bug cancel itself out. Live validation on the standalone sandbox in progress
-this session — see the plugin-side commit/session notes for the outcome.
+would have let the old bug cancel itself out.
+
+**Live validation attempted, not completed, this session.** Redeploying into the standalone
+`workspace-sandbox` instance (port 8763) by hand-patching `bundles.info`/overwriting installed jars
+turned out to be fragile: `bundles.info` already carried two duplicate lines per `com.codepilot1c.*`
+bundle (`0.1.7.20260916-1113` and a stale `0.1.7.20260914-1256`) before this session touched
+anything, and removing the apparently-stale one made the plugin disappear from the EDT UI entirely
+(confirmed by the operator) rather than making the fresh build active — some part of Equinox/P2's
+bundle resolution here does not follow simple "duplicate lines, highest version wins" semantics.
+Reverted both jars (from `.prebak2` backups) and `bundles.info` back to their exact pre-session
+byte-for-byte state; the operator confirmed the plugin is visible again after a restart. No fix from
+this session ever ran against a live EDT. Left for a future round: understand why the duplicate
+registration existed in the first place and find a redeploy method for this sandbox that does not
+require editing `bundles.info` by hand.
 
 ### Live validation on build `0.1.7.20260810-1011` (2026-08-10)
 
@@ -130,9 +142,12 @@ Tests: `CompositeTypeContractTest` gains three source-contract cases pinning the
 transaction-mapping step — this area needs a live BM transaction and the EDT metamodel, neither of
 which resolves in the plain Maven test bundle (see that file's own note).
 
-**Live validation pending** — no EDT instance was reachable from this session; the fix compiles and the
-existing plus new unit suite (21 tests touching this area) passes. Flagged for the next sandbox round:
-retry the exact case-6 repro (`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
+**Live validation attempted, not completed** — a redeploy into the standalone sandbox went wrong for
+reasons unrelated to this fix itself (see Round-36's note on the `bundles.info` duplicate-registration
+trap this session ran into and had to revert) and never got the fix loaded against a live EDT before
+the sandbox was rolled back to its prior build. The fix compiles and the existing plus new unit suite
+(21 tests touching this area) passes. Flagged for the next sandbox round: retry the exact case-6 repro
+(`update_metadata` on a bare `Constant`, `{"type":{"types":["Boolean"]}}`).
 
 ### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right (`5a97b8b`)
 
