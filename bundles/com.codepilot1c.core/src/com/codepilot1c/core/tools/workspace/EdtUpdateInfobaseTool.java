@@ -28,6 +28,7 @@ import com.codepilot1c.core.edt.runtime.EdtToolException;
 import com.codepilot1c.core.edt.runtime.EdtRuntimeService;
 import com.codepilot1c.core.edt.runtime.InfobaseIdentity;
 import com.codepilot1c.core.edt.runtime.InfobaseSiblingResolver;
+import com.codepilot1c.core.edt.runtime.ModelSyncBarrier;
 import com.codepilot1c.core.internal.VibeCorePlugin;
 import com.codepilot1c.core.logging.LogSanitizer;
 import com.codepilot1c.core.logging.VibeLogger;
@@ -144,6 +145,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
     private final EdtProjectResolver projectResolver;
     private final EdtRuntimeService runtimeService;
     private final InfobaseSiblingResolver siblingResolver;
+    private final ModelSyncBarrier modelSyncBarrier;
 
     public EdtUpdateInfobaseTool() {
         this(new EdtProjectResolver(), new EdtRuntimeService());
@@ -155,9 +157,15 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
 
     public EdtUpdateInfobaseTool(EdtProjectResolver projectResolver, EdtRuntimeService runtimeService,
             InfobaseSiblingResolver siblingResolver) {
+        this(projectResolver, runtimeService, siblingResolver, new ModelSyncBarrier());
+    }
+
+    public EdtUpdateInfobaseTool(EdtProjectResolver projectResolver, EdtRuntimeService runtimeService,
+            InfobaseSiblingResolver siblingResolver, ModelSyncBarrier modelSyncBarrier) {
         this.projectResolver = projectResolver;
         this.runtimeService = runtimeService;
         this.siblingResolver = siblingResolver;
+        this.modelSyncBarrier = modelSyncBarrier;
     }
 
     @Override
@@ -166,7 +174,9 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                 + "Platform version: EDT pin (runtime_version pins persistently) > auto " //$NON-NLS-1$
                 + "(NEWEST installed, including pre-releases) — check runtime_used in dry_run. " //$NON-NLS-1$
                 + "Gate on schema_applied, not on status: a non-exclusive apply commits code but " //$NON-NLS-1$
-                + "defers the schema and answers status=partial, updated=false."; //$NON-NLS-1$
+                + "defers the schema and answers status=partial, updated=false. " //$NON-NLS-1$
+                + "Files changed on disk outside EDT are refreshed into the model first; " //$NON-NLS-1$
+                + "a model_sync_warning means the update may carry the previous state."; //$NON-NLS-1$
     }
 
     @Override
@@ -298,6 +308,11 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                             infobase.getConnectionString().asConnectionString()); //$NON-NLS-1$
                 }
                 result.add("details", details); //$NON-NLS-1$
+                if (!dryRun) {
+                    // Before the equality pre-check too: a stale model would answer EQUAL for a file
+                    // that was just changed on disk and skip the very update the caller needs.
+                    awaitModelInSync(opId, result, projectName);
+                }
                 // Opt-in equality pre-check: short-circuit a redundant update BEFORE any pin/
                 // lease/webserver side effect. getEqualityState is an in-memory EDT query.
                 String equalityState = null;
@@ -365,6 +380,24 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                 }
             }
         });
+    }
+
+    /**
+     * Refreshes the project set from disk and waits (bounded) for EDT's BM model to process it, so the
+     * update exports what is on disk NOW rather than the state before an external write (feedback
+     * 2026-10-05-update-infobase-applies-previous-state). Never fails the update: a timeout or a
+     * refresh failure is written into the payload as {@code model_sync_warning}.
+     */
+    private void awaitModelInSync(String opId, JsonObject result, String projectName) {
+        if (modelSyncBarrier == null) {
+            return;
+        }
+        ModelSyncBarrier.Outcome outcome = modelSyncBarrier.awaitModelInSync(projectName);
+        ModelSyncBarrier.annotate(result, outcome);
+        if (!outcome.synced()) {
+            LOG.info("[%s] edt_update_infobase model sync: %s (projects=%s, failures=%s)", opId, //$NON-NLS-1$
+                    outcome.status(), outcome.projects(), outcome.failures());
+        }
     }
 
     /**
@@ -552,6 +585,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                         infobase.getConnectionString().asConnectionString());
             }
             result.add("details", details); //$NON-NLS-1$
+            awaitModelInSync(opId, result, projectName);
             // Opt-in equality pre-check — mirrors the synchronous path.
             String equalityState = null;
             if (skipIfCurrent) {

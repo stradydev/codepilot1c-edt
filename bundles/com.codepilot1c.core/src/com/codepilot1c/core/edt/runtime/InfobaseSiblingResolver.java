@@ -310,7 +310,7 @@ public class InfobaseSiblingResolver {
     }
 
     /** Extension project name &#x2192; parent (base configuration) project name, for the open workspace. */
-    private static Map<String, String> extensionParents(IV8ProjectManager v8ProjectManager) {
+    static Map<String, String> extensionParents(IV8ProjectManager v8ProjectManager) {
         Map<String, String> parents = new LinkedHashMap<>();
         try {
             for (IExtensionProject extensionProject : v8ProjectManager.getProjects(IExtensionProject.class)) {
