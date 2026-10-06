@@ -9,6 +9,35 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-38b (2026-10-06) — `git_mutate resolve_registration_conflicts`
+
+* **New `git_mutate` operation (`c3866b7`), owner decision "option a".** Feedback 2026-07-21 cases 4 and 7:
+  two branches registered new top-level objects at the same anchor of a `Configuration.mdo` flat list, and
+  the merge conflicts. While the file is conflict-marked EDT parses it only partially, so no BM-API call can
+  repair it, and hand-editing `.mdo` is forbidden. The operation settles such a file under these rules:
+  * Every hunk side must consist only of registration lines of a **multi-valued** list. A `default*`
+    single-valued reference refuses.
+  * The result is the union per list, ours first.
+  * A diff3 base drops what a side deleted.
+  * A one-sided line whose object is not on disk is dropped instead of resurrected. "On disk" means the
+    object's folder exists and its `mdclass` kind matches.
+  * Any other conflict refuses the whole call, and nothing is written.
+
+  `dry_run` previews the result, and `stage=true` runs `git add`. The operation only targets
+  `.../Configuration/Configuration.mdo`.
+
+  **Live-validated** through MCP on sandbox build `0.1.7.20261006-2033`, using a scratch git repo seeded
+  from `TestConfiguration`. Two branches each registered a new CommonModule after `CommonModule.OK`, and
+  the merge produced a real conflict, the exact case-7 shape. Results:
+  * `dry_run` reported the union and left the markers in place.
+  * The real call wrote both lines; the XML was well-formed, the file was staged, and no unmerged paths
+    remained.
+  * A conflict carrying a `<synonym>` line was refused, and the file hash was unchanged.
+
+  The follow-up commit adjusts two messages: a refusal now points at the EDT merge editor or at
+  "one side + `create_metadata adopt_existing`" (no longer "resolve by hand"), and after `stage=true` the
+  next step says "commit".
+
 ### Round-38 (2026-10-06) — feedback batch: associations, yaxunit filter, dynamic-list events
 
 **Live validation** on `workspace-sandbox`, build `0.1.7.20261006-2009`, run on the private configuration area
