@@ -49,5 +49,11 @@ public enum EdtToolErrorCode {
      * project: no update can land until the database itself is repaired (chdbfl.exe / Designer testing
      * and repair). Appended, never reordered, so existing codes keep their ordinals.
      */
-    TARGET_INFOBASE_DAMAGED
+    TARGET_INFOBASE_DAMAGED,
+    /**
+     * The infobase is already associated with ANOTHER project under the same branch context. EDT
+     * allows one project per infobase per context and refuses the association, so nothing was
+     * written; the holder must be dissociated first. Appended, never reordered.
+     */
+    INFOBASE_BOUND_TO_OTHER_PROJECT
 }

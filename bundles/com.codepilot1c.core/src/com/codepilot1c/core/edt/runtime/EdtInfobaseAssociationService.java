@@ -207,11 +207,12 @@ public class EdtInfobaseAssociationService {
         try {
             manager.associate(project, row, settings);
         } catch (RuntimeException e) {
-            // "Infobase ... is already connected" == idempotent re-bind; anything else is fatal.
+            // "already associated" is an idempotent re-bind ONLY when this project holds it.
             if (!isAlreadyConnected(e)) {
                 throw new EdtToolException(EdtToolErrorCode.EDT_SERVICE_UNAVAILABLE,
                         "Failed to associate infobase with branch context: " + detail(e), e); //$NON-NLS-1$
             }
+            requireHeldByThisProject(project, manager, ctx, row, e);
             LOG.info("manage_associations bind: already associated — proceeding (%s)", e.getMessage()); //$NON-NLS-1$
         }
         InfobaseReference effective = row;
@@ -255,6 +256,7 @@ public class EdtInfobaseAssociationService {
                     throw new EdtToolException(EdtToolErrorCode.EDT_SERVICE_UNAVAILABLE,
                             "Failed to copy association of '" + ref.getName() + "': " + detail(e), e); //$NON-NLS-1$ //$NON-NLS-2$
                 }
+                requireHeldByThisProject(project, manager, toCtx, ref, e);
             }
             copied.add(ref.getName());
         }
@@ -753,6 +755,44 @@ public class EdtInfobaseAssociationService {
                     "EDT project not found: " + projectName); //$NON-NLS-1$
         }
         return project;
+    }
+
+    /**
+     * Turns a swallowed "already associated" refusal into a hard error unless THIS project's
+     * association for {@code ctx} really holds the infobase.
+     *
+     * <p>EDT 2025.2.x {@code associate()} (bytecode-verified) first looks the infobase up across
+     * ALL workspace projects in the same context ({@code getAssociation(ref, ctx)}) and, when a
+     * different project holds it and the settings are not forced, throws
+     * "Infobase {0} is already associated with project {1}" — writing nothing. Treating that as an
+     * idempotent re-bind reported {@code success:true} for a bind that never landed, and the
+     * follow-up set-default then failed because the context did not contain the infobase
+     * (feedback 2026-09-24: server IB held by {@code Accounting management} on the same branch).
+     * Forcing is not offered here: EDT's forced path silently dissociates the other project.</p>
+     */
+    private void requireHeldByThisProject(IProject project, IInfobaseAssociationManager manager,
+            InfobaseAssociationContext ctx, InfobaseReference row, RuntimeException refusal) {
+        if (associationContains(project, manager, ctx, row)) {
+            return;
+        }
+        String holder = null;
+        try {
+            Optional<IInfobaseAssociation> other = manager.getAssociation(row, ctx);
+            if (other.isPresent() && other.get().getProject() != null) {
+                holder = other.get().getProject().getName();
+            }
+        } catch (RuntimeException e) {
+            LOG.warn("manage_associations: holder lookup failed (context=%s): %s", //$NON-NLS-1$
+                    contextValue(ctx), detail(e));
+        }
+        String holderText = holder == null ? "another project" : "project '" + holder + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        throw new EdtToolException(EdtToolErrorCode.INFOBASE_BOUND_TO_OTHER_PROJECT,
+                "Infobase '" + row.getName() + "' is already associated with " + holderText //$NON-NLS-1$ //$NON-NLS-2$
+                        + " under context " + contextValue(ctx) //$NON-NLS-1$
+                        + " — EDT allows one project per infobase per branch context, so nothing was " //$NON-NLS-1$
+                        + "written. Dissociate it from that project first (manage_associations " //$NON-NLS-1$
+                        + "action=dissociate), or bind a different infobase. EDT: " + detail(refusal), //$NON-NLS-1$
+                refusal);
     }
 
     private static boolean isAlreadyConnected(RuntimeException e) {

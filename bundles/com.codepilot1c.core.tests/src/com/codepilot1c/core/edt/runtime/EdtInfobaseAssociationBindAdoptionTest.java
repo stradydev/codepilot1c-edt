@@ -12,6 +12,7 @@ package com.codepilot1c.core.edt.runtime;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -103,7 +104,95 @@ public class EdtInfobaseAssociationBindAdoptionTest {
         assertEquals(entry.getUuid().toString(), outcome.uuid());
     }
 
+    /**
+     * Feedback 2026-09-24: EDT refuses to associate an infobase that ANOTHER project already holds
+     * in the same context ("Infobase {0} is already associated with project {1}") and writes
+     * nothing. bind used to swallow that as an idempotent re-bind and answer success:true; with
+     * set_default the follow-up then failed EDT_SERVICE_UNAVAILABLE. It must fail loudly, naming
+     * the holder, before any set-default attempt.
+     */
+    @Test
+    public void bindRefusesWhenAnotherProjectHoldsTheInfobaseInTheSameContext() {
+        InfobaseReference row = InfobaseReferences.newFileInfobaseReference(IB_PATH);
+        row.setName("BF-12442_BF-13761"); //$NON-NLS-1$
+        row.setUuid(UUID.randomUUID());
+        HeldElsewhereManager manager = new HeldElsewhereManager(row, false);
+        TestableAssociationService service = new TestableAssociationService(
+                new StubGateway(manager.proxy, row));
+
+        for (boolean setDefault : new boolean[] { false, true }) {
+            try {
+                service.bind("MCPapi", "BF-14128", "BF-12442_BF-13761", null, setDefault); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                fail("REGRESSION: a bind EDT refused (infobase held by another project) must not " //$NON-NLS-1$
+                        + "report success (set_default=" + setDefault + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            } catch (EdtToolException e) {
+                assertEquals(EdtToolErrorCode.INFOBASE_BOUND_TO_OTHER_PROJECT, e.getCode());
+                assertTrue("the error must name the holder project: " + e.getMessage(), //$NON-NLS-1$
+                        e.getMessage().contains("Accounting management")); //$NON-NLS-1$
+            }
+        }
+        assertEquals("set-default must not be attempted for a bind that never landed", //$NON-NLS-1$
+                0, manager.setDefaultCalls.get());
+    }
+
+    /** The same refusal when THIS project already holds the infobase stays an idempotent re-bind. */
+    @Test
+    public void bindStaysIdempotentWhenThisProjectAlreadyHoldsTheInfobase() {
+        InfobaseReference row = InfobaseReferences.newFileInfobaseReference(IB_PATH);
+        row.setName("polygon-task-D"); //$NON-NLS-1$
+        row.setUuid(UUID.randomUUID());
+        HeldElsewhereManager manager = new HeldElsewhereManager(row, true);
+        TestableAssociationService service = new TestableAssociationService(
+                new StubGateway(manager.proxy, row));
+
+        EdtInfobaseAssociationService.BindOutcome outcome =
+                service.bind("Polygon", "task-E", null, IB_PATH, false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(row.getUuid().toString(), outcome.uuid());
+    }
+
     // ---- support -------------------------------------------------------------------------------
+
+    /**
+     * {@code associate} always refuses with EDT's exact "already associated with project" text;
+     * {@code ownsIt} decides whether THIS project's context association holds the infobase
+     * (idempotent re-bind) or another project's does (the live 2026-09-24 shape).
+     */
+    private static final class HeldElsewhereManager implements InvocationHandler {
+        final AtomicInteger setDefaultCalls = new AtomicInteger();
+        private final InfobaseReference row;
+        private final boolean ownsIt;
+        private final IInfobaseAssociationManager proxy =
+                (IInfobaseAssociationManager) Proxy.newProxyInstance(
+                        IInfobaseAssociationManager.class.getClassLoader(),
+                        new Class<?>[] { IInfobaseAssociationManager.class }, this);
+
+        HeldElsewhereManager(InfobaseReference row, boolean ownsIt) {
+            this.row = row;
+            this.ownsIt = ownsIt;
+        }
+
+        @Override
+        public Object invoke(Object p, Method method, Object[] args) {
+            switch (method.getName()) {
+                case "associate": //$NON-NLS-1$
+                    throw new IllegalStateException("Infobase " + row.getName() //$NON-NLS-1$
+                            + " is already associated with project " //$NON-NLS-1$
+                            + (ownsIt ? ((IProject) args[0]).getName() : "Accounting management")); //$NON-NLS-1$
+                case "getAssociation": //$NON-NLS-1$
+                    if (args[0] instanceof IProject) {
+                        return ownsIt ? Optional.of(newAssociationProxy(List.of(row))) : Optional.empty();
+                    }
+                    return Optional.of(newAssociationProxy(List.of(row),
+                            newProjectProxy("Accounting management"))); //$NON-NLS-1$
+                case "setDefaultInfobase": //$NON-NLS-1$
+                    setDefaultCalls.incrementAndGet();
+                    return null;
+                default:
+                    return defaultReturn(method);
+            }
+        }
+    }
 
     /**
      * Fake manager mirroring the live quirk: {@code setDefaultInfobase} ALWAYS throws (as it does
@@ -282,11 +371,16 @@ public class EdtInfobaseAssociationBindAdoptionTest {
     }
 
     private static IInfobaseAssociation newAssociationProxy(List<InfobaseReference> refs) {
+        return newAssociationProxy(refs, null);
+    }
+
+    private static IInfobaseAssociation newAssociationProxy(List<InfobaseReference> refs, IProject owner) {
         return (IInfobaseAssociation) Proxy.newProxyInstance(
                 IInfobaseAssociation.class.getClassLoader(),
                 new Class<?>[] { IInfobaseAssociation.class },
                 (proxy, method, args) -> switch (method.getName()) {
                     case "getInfobases" -> refs; //$NON-NLS-1$
+                    case "getProject" -> owner; //$NON-NLS-1$
                     case "getDefaultInfobase" -> null; //$NON-NLS-1$
                     default -> defaultReturn(method);
                 });
