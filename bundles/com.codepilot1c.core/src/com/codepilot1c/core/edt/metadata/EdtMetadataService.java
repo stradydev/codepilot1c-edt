@@ -5501,7 +5501,10 @@ public class EdtMetadataService {
         executeRead(project, readTx -> {
             for (String typeString : typeStrings) {
                 TypeItem item = resolveTypeItem(typeString, readTx);
-                if (item == null && !isSimpleTypeQuery(typeString) && !isPlatformBuiltInType(typeString)) {
+                // A bare platform type (UUID, Boolean, ValueTable, …) is never a BM Type object of
+                // the project: let it fall through to the resolver ladder in
+                // resolveFormAttributeTypeItem (TypeProviderService / configuration scan).
+                if (item == null && PlatformTypeNames.isBmMissFinal(typeString)) {
                     throw new MetadataOperationException(
                             MetadataOperationCode.INVALID_PROPERTY_VALUE,
                             "Type not found in BM: " + typeString, false); //$NON-NLS-1$
@@ -6334,7 +6337,8 @@ public class EdtMetadataService {
             executeRead(project, readTx -> {
                 for (String typeString : typeStrings) {
                     TypeItem item = resolveTypeItem(typeString, readTx);
-                    if (item == null && !isSimpleTypeQuery(typeString)) {
+                    // Bare platform types fall through to the per-feature ladder (see PlatformTypeNames).
+                    if (item == null && PlatformTypeNames.isBmMissFinal(typeString)) {
                         throw new MetadataOperationException(
                                 MetadataOperationCode.INVALID_PROPERTY_VALUE,
                                 "Type not found in BM: " + typeString, false); //$NON-NLS-1$
@@ -6979,7 +6983,8 @@ public class EdtMetadataService {
                                 null));
             }
 
-            List<FieldTypeCandidate> allCandidates = new ArrayList<>(unique.values());
+            List<FieldTypeCandidate> allCandidates = new ArrayList<>(
+                    PlatformTypeNames.primitivesFirst(new ArrayList<>(unique.values())));
             int total = allCandidates.size();
             if (allCandidates.size() > limit) {
                 allCandidates = new ArrayList<>(allCandidates.subList(0, limit));
@@ -9648,7 +9653,8 @@ public class EdtMetadataService {
         executeRead(project, readTx -> {
             for (String typeString : typeStrings) {
                 TypeItem item = resolveTypeItem(typeString, readTx);
-                if (item == null && !isSimpleTypeQuery(typeString) && !isPlatformBuiltInType(typeString)) {
+                // Bare platform types fall through to setAttributeType's ladder (see PlatformTypeNames).
+                if (item == null && PlatformTypeNames.isBmMissFinal(typeString)) {
                     throw new MetadataOperationException(
                             MetadataOperationCode.INVALID_PROPERTY_VALUE,
                             "Type not found in BM: " + typeString, false); //$NON-NLS-1$
@@ -12481,7 +12487,8 @@ public class EdtMetadataService {
         return isStringType(token)
                 || isNumberType(token)
                 || isDateType(token)
-                || isBooleanType(token);
+                || isBooleanType(token)
+                || PlatformTypeNames.isSimpleTypeToken(token);
     }
 
     @SuppressWarnings("unchecked")
@@ -13044,55 +13051,11 @@ public class EdtMetadataService {
     }
 
     private String canonicalPlatformBuiltInTypeName(String typeString) {
-        if (typeString == null || typeString.isBlank()) {
-            return null;
-        }
-        String base = typeString.trim();
-        int openParen = base.indexOf('(');
-        if (openParen > 0) {
-            base = base.substring(0, openParen).trim();
-        }
-        int dot = base.indexOf('.');
-        if (dot > 0) {
-            base = base.substring(0, dot);
-        }
-        String token = normalizeToken(base);
-        return switch (token) {
-            case "valuetable", "таблицазначений" -> "ValueTable"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "valuelist", "списокзначений" -> "ValueList"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "valuetree", "деревозначений" -> "ValueTree"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "array", "массив" -> "Array"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "fixedarray", "фиксированныймассив" -> "FixedArray"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "structure", "структура" -> "Structure"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "fixedstructure", "фиксированнаяструктура" -> "FixedStructure"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "map", "соответствие" -> "Map"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "fixedmap", "фиксированноесоответствие" -> "FixedMap"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            default -> null;
-        };
+        return PlatformTypeNames.canonicalPlatformBuiltInTypeName(typeString);
     }
 
     private String canonicalSimpleTypeName(String typeString) {
-        if (typeString == null || typeString.isBlank()) {
-            return null;
-        }
-        String base = typeString.trim();
-        int openParen = base.indexOf('(');
-        if (openParen > 0) {
-            base = base.substring(0, openParen).trim();
-        }
-        int dot = base.indexOf('.');
-        if (dot > 0) {
-            base = base.substring(0, dot);
-        }
-        String token = normalizeToken(base);
-        return switch (token) {
-            case "string", "строка" -> "String"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "number", "число" -> "Number"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "date", "дата" -> "Date"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            case "boolean", "bool", "булево" -> "Boolean"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            case "valuestorage", "хранилищезначения" -> "ValueStorage"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            default -> null;
-        };
+        return PlatformTypeNames.canonicalSimpleTypeName(typeString);
     }
 
     private void applyTopLevelProperties(
