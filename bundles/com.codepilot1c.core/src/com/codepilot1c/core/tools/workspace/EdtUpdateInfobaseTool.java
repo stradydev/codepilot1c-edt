@@ -978,6 +978,20 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
             return;
         }
         result.addProperty("equality_state_after", after); //$NON-NLS-1$
+        if (applied && !dynamicOnly && !EQUALITY_EQUAL.equals(after) && result.has("model_sync_warning")) { //$NON-NLS-1$
+            // The model-sync barrier did NOT settle before the apply, so the NOT_EQUAL may be exactly what
+            // it looks like: the IB got the model's PREVIOUS text (feedback 2026-10-06 stale apply — the
+            // unconditional "gate on schema_applied" below sent a mutation run to a false green there).
+            result.addProperty("stale_apply_suspected", true); //$NON-NLS-1$
+            result.addProperty("equality_state_after_warning", //$NON-NLS-1$
+                    "The update reported success yet the infobase still differs from the project, AND the " //$NON-NLS-1$
+                            + "model-sync barrier did not settle before the apply (see model_sync_warning): " //$NON-NLS-1$
+                            + "files changed outside EDT may not be in this update, so the infobase can be " //$NON-NLS-1$
+                            + "running the PREVIOUS text. Do NOT gate on schema_applied here — re-run " //$NON-NLS-1$
+                            + "update_infobase once (it waits for the model again) and prove the live code " //$NON-NLS-1$
+                            + "with a discriminating test before trusting a green run."); //$NON-NLS-1$
+            return;
+        }
         if (applied && !dynamicOnly && !EQUALITY_EQUAL.equals(after)) {
             // This branch only runs when dynamic_only was NOT set, i.e. the apply DID take the exclusive
             // lock — so advising "apply one exclusive update" was advice the caller had already followed,
@@ -989,6 +1003,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                     "The update reported success yet the infobase still differs from the project. This " //$NON-NLS-1$
                             + "apply was EXCLUSIVE (dynamic_only is not set), so re-running it — or " //$NON-NLS-1$
                             + "running another exclusive one — will NOT converge the state; do not loop. " //$NON-NLS-1$
+                            + "The model-sync barrier settled before this apply (no model_sync_warning). " //$NON-NLS-1$
                             + "Gate on schema_applied, which is true here: the schema is applied and it is " //$NON-NLS-1$
                             + "EDT's equality comparison that has not converged, a known reporting mode " //$NON-NLS-1$
                             + "distinct from a deferred restructure. A restructure that finished in seconds " //$NON-NLS-1$

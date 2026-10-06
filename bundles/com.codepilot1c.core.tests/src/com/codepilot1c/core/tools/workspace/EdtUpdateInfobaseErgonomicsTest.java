@@ -237,6 +237,27 @@ public class EdtUpdateInfobaseErgonomicsTest {
                 warning.contains("Apply one EXCLUSIVE update")); //$NON-NLS-1$
     }
 
+    /**
+     * Feedback 2026-10-06 (stale apply): when the model-sync barrier did NOT settle, a NOT_EQUAL after an
+     * exclusive apply may mean the IB got the PREVIOUS text. The unconditional "gate on schema_applied"
+     * sent a mutation run to a false green; here it must say the opposite and flag the suspicion.
+     */
+    @Test
+    public void anUnsettledModelSyncTurnsNotEqualIntoAStaleApplySuspicion() {
+        com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+        result.addProperty("model_sync_warning", "Waiting for EDT to finish syncing timed out"); //$NON-NLS-1$ //$NON-NLS-2$
+        EdtUpdateInfobaseTool.annotatePostUpdateEquality(result, "NOT_EQUAL", true, false); //$NON-NLS-1$
+        assertTrue(result.get("stale_apply_suspected").getAsBoolean()); //$NON-NLS-1$
+        String warning = result.get("equality_state_after_warning").getAsString(); //$NON-NLS-1$
+        assertTrue(warning, warning.contains("Do NOT gate on schema_applied")); //$NON-NLS-1$
+        assertTrue(warning, warning.contains("re-run update_infobase once")); //$NON-NLS-1$
+
+        com.google.gson.JsonObject settled = new com.google.gson.JsonObject();
+        EdtUpdateInfobaseTool.annotatePostUpdateEquality(settled, "NOT_EQUAL", true, false); //$NON-NLS-1$
+        assertFalse("a settled barrier keeps the non-convergence reading", //$NON-NLS-1$
+                settled.has("stale_apply_suspected")); //$NON-NLS-1$
+    }
+
     @Test
     public void aDynamicApplyGetsNoNonConvergenceWarningAtAll() {
         // It carries its own richer dynamic_only warning; two warnings would compete.
