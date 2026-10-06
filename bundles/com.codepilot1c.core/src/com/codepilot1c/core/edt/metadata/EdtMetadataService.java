@@ -3277,11 +3277,19 @@ public class EdtMetadataService {
                         "handler entry missing 'handler' procedure name for event '" //$NON-NLS-1$
                                 + eventName + "'", false); //$NON-NLS-1$
             }
-            Event resolved = findEventByName(topLevelEvents, eventName);
+            // ExtInfo events FIRST: EDT's getAllowedEvents(FormVisualEntity) (form 31.x bytecode)
+            // unconditionally appends getAllowedEvents(extInfo), so the top-level list is a
+            // SUPERSET and a top-level-first lookup never reached the extInfo branch. That wrote
+            // e.g. a dynamic-list table's OnGetDataAtServer into the table's own <handlers>, which
+            // the platform never calls (feedback 2026-06-24 Issue 3, live-confirmed 2026-10-06).
+            Event resolved = null;
             boolean atExtInfo = false;
-            if (resolved == null) {
+            if (extInfoContainer != null) {
                 resolved = findEventByName(extInfoEvents, eventName);
                 atExtInfo = resolved != null;
+            }
+            if (resolved == null) {
+                resolved = findEventByName(topLevelEvents, eventName);
             }
             if (resolved == null) {
                 throw new MetadataOperationException(
@@ -3299,6 +3307,10 @@ public class EdtMetadataService {
             EventHandlerContainer targetContainer =
                     (b.atExtInfo() && extInfoContainer != null) ? extInfoContainer : container;
             removeExistingHandlerForEvent(targetContainer, b.event());
+            if (targetContainer != container) {
+                // Heal an earlier mis-write of the same event into the item's own list (inert).
+                removeExistingHandlerForEvent(container, b.event());
+            }
             EventHandler handler = FormFactory.eINSTANCE.createEventHandler();
             handler.setEvent(b.event());
             handler.setName(b.handlerName());
