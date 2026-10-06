@@ -11,6 +11,21 @@ commit hash in parentheses where useful.
 
 ### Round-38 (2026-10-06) — feedback batch: associations, yaxunit filter, dynamic-list events
 
+**Live validation** on `workspace-sandbox`, build `0.1.7.20261006-2009`, run on the private configuration area
+(the shared `bundles.info` hash was unchanged).
+
+* **manage_associations:** `File_am_sandbox_rb` is held by `Accounting management` under
+  `refs/heads/Development`. A `bind` of that IB to `TestConfiguration` on the same branch, with
+  `set_default` both false and true, failed `INFOBASE_BOUND_TO_OTHER_PROJECT` and named the holder.
+  `TestConfiguration`'s `list` stayed empty. A re-bind to `Accounting management` itself was still a
+  `success`, and its default did not move.
+* **mutate_form_model:** `set_item handlers:[OnGetDataAtServer]` on `Catalog.Catalog.Form.WaveListForm.List`
+  (`TestConfiguration`) landed in `<extInfo xsi:type="form:DynamicListTableExtInfo"><handlers>`. The same call
+  on the previous build landed in the table's own `<handlers>`. The form was restored from a backup afterwards.
+* **yaxunit_run:** `tests=[NormalizeForHash_EmptyText_ReturnsEmpty, NoSuchTest_R38]` on `Accounting
+  management` answered `status=passed`, `total=1`, with `filter_unmatched=["CM_ErrorsRegistration.NoSuchTest_R38"]`
+  and a `filter_note`.
+
 * **manage_associations `bind`/`copy` (`4377953`).** EDT's `associate()` refuses an infobase that a
   DIFFERENT workspace project already holds in the same branch context
   ("Infobase {0} is already associated with project {1}") and writes nothing — bytecode-verified on
