@@ -9,7 +9,37 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
-### Round-37 (2026-10-06) — feedback batch since 2026-09-16 (unit-tested, live validation pending)
+### Round-37 (2026-10-06) — feedback batch since 2026-09-16, live-validated on the sandbox
+
+**Live validation** on `workspace-sandbox`, builds `0.1.7.20261006-1724` and `-1745`. The sandbox ran on a
+**private copy of the configuration area** (`-configuration`), so the shared `bundles.info` the stack EDTs
+read was never touched; its hash was checked unchanged before and after.
+
+* **UUID:** `apply_form_recipe` added `R37Uuid` (`type:"UUID"`) and `R37UuidRu` (`type:"УникальныйИдентификатор"`)
+  to `Catalog.Catalog.Form.WaveFormR3`; both landed as `<valueType><types>UUID</types>` in `Form.form`. A typo
+  (`Strng`) is still refused and its attribute is absent from the file, so the write transaction rolls back.
+* **get_diagnostics:** a common module with the same name as one in `Accounting management` was created
+  in `TestConfiguration` and then removed. Results: `project_name` picked the right file in both directions;
+  without it the call failed listing both candidates; a path missing from the named project was an error
+  naming where it does exist; the `<project>/src/...` form worked.
+* **update_infobase:** a `Raise "R37MARKER"` written into `ErrorsRegistration.NormalizeForHash` from outside
+  EDT, then ONE `update_infobase`, then yaxunit: the test errored with `R37MARKER`. A git revert, ONE update
+  and the test passed again. So a single call deployed the current disk state both ways. The barrier costs
+  ~2.6 s warm, ~22 s while the project is still BUILDING.
+  Both calls answered `UPDATE_FAILED` regardless: the main configuration applied, then EDT's NPE on the
+  sandbox's stale probe extension `ZZZ_SmokeTest_Round30` (its `Configuration.mdo` has no UUID). This is a
+  sandbox artefact, not a regression. It did show that a failure after the barrier dropped `model_sync`
+  (fixed below).
+* **web_publication:** a private Apache copy (`apache-sandbox-r37`, port 8099) was registered.
+  * `publish enable_standard_odata=true` wrote a well-formed vrd with `<standardOdata>` inside `<point>`.
+  * A seeded backslash duplicate of `LoadModule` was collapsed to one line, reported in `conf_repairs`.
+  * `remove` of the only publication: EDT stripped the module line, which confirms the root cause, and the
+    tool restored it (`conf_repairs`). `httpd -t` was clean.
+  * A failing probe (OData on a missing IB, HTTP 404) carried the platform's JSON error body.
+* **Follow-up from the live run (`479eed8`):** `update_infobase` error payloads now carry `model_sync` /
+  `model_sync_warning`. The main configuration may already have been applied when a later step fails, and
+  the caller still needs to know whether it was the current disk state. The probe body excerpt drops the
+  UTF-8 BOM the platform's JSON errors start with. Both re-confirmed live on `-1745`.
 
 * **`apply_form_recipe` / `mutate_form_model`, `add_metadata_child`, `update_metadata`: bare platform
   types such as `UUID` were refused with `Type not found in BM` (`6067c97`).** The pre-resolve gate
@@ -34,8 +64,9 @@ commit hash in parentheses where useful.
   `refreshLocal(DEPTH_INFINITE)` on the target, its base configuration and its extensions, then
   `IBmModelManager.waitModelSynchronization`, bounded at 60 s
   (`-Dcodepilot1c.edt.update.modelsync.wait.ms`). Never fails the update: the result carries
-  `model_sync{status,…}` and `model_sync_warning` on timeout/partial failure. Root cause is confirmed
-  by code reading only — whether the barrier fully closes the race needs a live run. Feedback
+  `model_sync{status,…}` and `model_sync_warning` on timeout/partial failure. A single call after an
+  external write deployed the new state in the live run above. There was no A/B against the old build, so
+  "the barrier is what closed it" is inferred, not measured. Feedback
   `2026-10-05-update-infobase-applies-previous-state`.
 * **`web_publication remove` stripped `LoadModule _1cws_module`; `publish` could leave two module lines
   (`0b20841`).** EDT's `ApachePublishDelegate$ConfigUpdate` drops the module line when no
