@@ -332,6 +332,7 @@ public class WebPublicationTool extends AbstractTool {
         EdtWebPublicationService.PublicationExtras extras = parsePublicationExtras(parameters);
         InfobasePublication publication = publicationService.publish(serverName, name, location, connection,
                 wsapVersion, extras);
+        appendConfRepairNotes(result);
         result.addProperty("name", publication.getName()); //$NON-NLS-1$
         result.addProperty("location", publication.getLocation()); //$NON-NLS-1$
         result.addProperty("infobase_connection", publication.getInfobaseConnection()); //$NON-NLS-1$
@@ -348,7 +349,22 @@ public class WebPublicationTool extends AbstractTool {
         String name = requireString(parameters, "name"); //$NON-NLS-1$
         boolean removed = publicationService.removePublication(serverName, name);
         result.addProperty("removed", removed); //$NON-NLS-1$
+        appendConfRepairNotes(result);
         maybeRestart(parameters, serverName, result);
+    }
+
+    /**
+     * Surfaces the service's post-op repairs of EDT's output (a stripped or duplicated
+     * {@code LoadModule _1cws_module}, a malformed vrd) so the caller sees the conf was touched.
+     */
+    private void appendConfRepairNotes(JsonObject result) {
+        List<String> notes = publicationService.drainConfRepairNotes();
+        if (notes.isEmpty()) {
+            return;
+        }
+        JsonArray array = new JsonArray();
+        notes.forEach(array::add);
+        result.add("conf_repairs", array); //$NON-NLS-1$
     }
 
     private void doRestart(Map<String, Object> parameters, JsonObject result) {

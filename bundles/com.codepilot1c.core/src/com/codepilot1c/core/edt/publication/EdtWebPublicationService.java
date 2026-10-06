@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -57,7 +58,11 @@ import com.codepilot1c.core.logging.VibeLogger;
  * <ul>
  *   <li>{@code ApachePublishDelegate.ConfigUpdate} is idempotent: existing
  *       {@code LoadModule _1cws_module} lines and the current alias's blocks are stripped and
- *       rewritten, so re-publish never duplicates directives.</li>
+ *       rewritten, so re-publish never duplicates directives it recognizes. But it writes the module
+ *       line back only while a {@code SetHandler 1c-application} block survives, so removing the LAST
+ *       publication strips {@code LoadModule _1cws_module} as well — {@link #removePublication} and
+ *       {@link #publish} therefore re-ensure exactly one module line afterwards
+ *       ({@link ApacheWsModuleLines}).</li>
  *   <li>{@code ApachePublishDelegateWin32.restart()} is a literal {@code return false} — EDT
  *       cannot restart Apache on Windows. {@link #restartServer} therefore falls back to a
  *       kill+start of the foreground {@code httpd.exe} (portable, non-service installs).</li>
@@ -135,6 +140,8 @@ public class EdtWebPublicationService {
     }
 
     private final EdtRuntimeGateway gateway;
+    /** Post-op repair notes per calling thread; see {@link #drainConfRepairNotes}. */
+    private final ThreadLocal<List<String>> confRepairNotes = ThreadLocal.withInitial(ArrayList::new);
 
     public EdtWebPublicationService() {
         this(new EdtRuntimeGateway());
@@ -373,6 +380,7 @@ public class EdtWebPublicationService {
         publication.setInfobaseConnection(infobaseConnection);
         publication.setEnable(true);
         applyExtras(publication, extras);
+        Path webExtensionUsed = null;
 
         try {
             if (wsapVersion != null && !wsapVersion.isBlank()) {
@@ -383,7 +391,8 @@ public class EdtWebPublicationService {
                     throw new EdtToolException(EdtToolErrorCode.WEB_SERVER_ACCESS_FAILED,
                             "No publish delegate registered for web server type " + server.getTypeId()); //$NON-NLS-1$
                 }
-                delegate.publish(publication, server, wsap.modulePath());
+                webExtensionUsed = wsap.modulePath();
+                delegate.publish(publication, server, webExtensionUsed);
             } else {
                 // PublicationManager.publish(pub, server) hands the delegate a NULL web-extension Path
                 // (verified in services.core 21.0 bytecode: it does aconst_null), which the Apache delegate
@@ -405,6 +414,7 @@ public class EdtWebPublicationService {
                                     + "' from the web server conf (no LoadModule _1cws_module?). " //$NON-NLS-1$
                                     + "Pass wsap_version to pin it explicitly."); //$NON-NLS-1$
                 }
+                webExtensionUsed = webExtension;
                 delegate.publish(publication, server, webExtension);
             }
         } catch (WebServerAccessException e) {
@@ -420,9 +430,61 @@ public class EdtWebPublicationService {
                     "publish '" + name + "' on '" + serverName + "' failed inside the EDT publish delegate: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                             + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), e);
         }
+        repairWsModuleLine(server, "publish '" + name + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                ApacheWsModuleLines.modulePathKey(webExtensionUsed.toString()),
+                ApacheWsModuleLines.moduleLineFor(webExtensionUsed.toString()));
         refreshManagerSnapshot(server, publication);
         LOG.info("Published '%s' on '%s' (location=%s)", name, serverName, effectiveLocation); //$NON-NLS-1$
         return publication;
+    }
+
+    /**
+     * Post-op repair of the registered conf's {@code LoadModule _1cws_module} line — EDT's
+     * {@code ApachePublishDelegate} drops it on the last remove and never dedups a variant it did not
+     * match; see {@link ApacheWsModuleLines}. Best effort: an unreadable conf is logged, never a failed
+     * operation (the delegate already succeeded). The outcome note is queued for
+     * {@link #drainConfRepairNotes}.
+     */
+    private void repairWsModuleLine(WebServer server, String operation, String preferredPathKey,
+            String fallbackLine) {
+        Path conf = server.getConfigLocation();
+        if (conf == null || !Files.isRegularFile(conf)) {
+            LOG.debug("No registered conf file for '%s', skipping the LoadModule repair after %s", //$NON-NLS-1$
+                    server.getName(), operation);
+            return;
+        }
+        try {
+            String text = Files.readString(conf, StandardCharsets.UTF_8);
+            ApacheWsModuleLines.Outcome outcome = ApacheWsModuleLines.normalize(text, preferredPathKey, fallbackLine);
+            if (outcome.changed()) {
+                Files.writeString(conf, outcome.text(), StandardCharsets.UTF_8);
+            }
+            if (outcome.note() != null) {
+                String note = operation + ": " + conf + ": " + outcome.note(); //$NON-NLS-1$ //$NON-NLS-2$
+                LOG.info("%s", note); //$NON-NLS-1$
+                addConfRepairNote(note);
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("Could not verify the LoadModule _1cws_module line in %s after %s: %s", conf, operation, //$NON-NLS-1$
+                    e.toString());
+            addConfRepairNote(operation + ": could not verify the LoadModule _1cws_module line in " + conf //$NON-NLS-1$
+                    + " (" + e.getMessage() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private void addConfRepairNote(String note) {
+        confRepairNotes.get().add(note);
+    }
+
+    /**
+     * Notes about post-op repairs of the conf/vrd made by the last {@link #publish} /
+     * {@link #removePublication} on the CALLING thread, oldest first; draining clears them. Empty when
+     * EDT's output needed no repair.
+     */
+    public List<String> drainConfRepairNotes() {
+        List<String> notes = new ArrayList<>(confRepairNotes.get());
+        confRepairNotes.get().clear();
+        return notes;
     }
 
     /**
@@ -538,15 +600,37 @@ public class EdtWebPublicationService {
                     "Publication '" + name + "' not found on web server '" + serverName + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         Publication target = publication;
+        // EDT's ConfigUpdate drops every LoadModule _1cws_module line and writes one back only while a
+        // SetHandler 1c-application block survives, so removing the last publication strips the module.
+        // Remember the line now and restore it afterwards (see ApacheWsModuleLines).
+        String moduleLineBefore = readModuleLine(server);
         // PublicationManager.remove fires firePublicationRemovedEvent synchronously on THIS thread and
         // AbstractPublicationEditor.publicationRemoved answers it with an unguarded close(false) -> UI hop.
-        return onUiThread(() -> {
+        boolean removed = onUiThread(() -> {
             try {
                 return Boolean.valueOf(manager.remove(server, target));
             } catch (WebServerAccessException e) {
                 throw accessFailed("remove publication '" + name + "'", serverName, e); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }).booleanValue();
+        repairWsModuleLine(server, "remove '" + name + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                ApacheWsModuleLines.modulePathKey(ApacheWsModuleLines.modulePath(moduleLineBefore)),
+                moduleLineBefore);
+        return removed;
+    }
+
+    /** The registered conf's first {@code LoadModule _1cws_module} line, or {@code null} (none / unreadable). */
+    private static String readModuleLine(WebServer server) {
+        Path conf = server.getConfigLocation();
+        if (conf == null || !Files.isRegularFile(conf)) {
+            return null;
+        }
+        try {
+            return ApacheWsModuleLines.firstModuleLine(Files.readString(conf, StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("Could not read %s before remove: %s", conf, e.toString()); //$NON-NLS-1$
+            return null;
+        }
     }
 
     // -- restart / probe --------------------------------------------------------------------
