@@ -21,7 +21,8 @@ public enum GitOperation {
     CHECKOUT(true),
     CREATE_BRANCH(true),
     ADD(true),
-    COMMIT(true);
+    COMMIT(true),
+    RESOLVE_REGISTRATION_CONFLICTS(true);
 
     private final boolean mutating;
 

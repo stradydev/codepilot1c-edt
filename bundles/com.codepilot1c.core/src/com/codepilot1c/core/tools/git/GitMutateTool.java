@@ -29,7 +29,7 @@ public class GitMutateTool extends AbstractTool {
               "properties": {
                 "operation": {
                   "type": "string",
-                  "enum": ["init", "create", "create_repo", "clone", "remote_add", "remote_set_url", "fetch", "pull", "push", "checkout", "create_branch", "add", "commit"]
+                  "enum": ["init", "create", "create_repo", "clone", "remote_add", "remote_set_url", "fetch", "pull", "push", "checkout", "create_branch", "add", "commit", "resolve_registration_conflicts"]
                 },
                 "project_name": {
                   "type": "string",
@@ -69,7 +69,15 @@ public class GitMutateTool extends AbstractTool {
                 },
                 "paths": {
                   "type": ["array", "string"],
-                  "description": "Пути для add"
+                  "description": "Пути для add; для resolve_registration_conflicts — конкретные конфликтные Configuration.mdo (по умолчанию все)"
+                },
+                "dry_run": {
+                  "type": "boolean",
+                  "description": "resolve_registration_conflicts: показать объединение, ничего не записывая"
+                },
+                "stage": {
+                  "type": "boolean",
+                  "description": "resolve_registration_conflicts: после записи выполнить git add для разрешённых файлов"
                 },
                 "message": {
                   "type": "string",
@@ -93,7 +101,10 @@ public class GitMutateTool extends AbstractTool {
 
     @Override
     public String getDescription() {
-        return "Performs allowed git changes. For an existing repository use project_name, repo_path, or the current EDT context; for init/create/clone you must pass repo_path."; //$NON-NLS-1$
+        return "Performs allowed git changes. For an existing repository use project_name, repo_path, or the current EDT context; for init/create/clone you must pass repo_path. " //$NON-NLS-1$
+                + "resolve_registration_conflicts settles a mid-merge Configuration.mdo whose conflict hunks hold only " //$NON-NLS-1$
+                + "object registration lines (both branches registered new objects): keeps the union, drops lines whose " //$NON-NLS-1$
+                + "object is absent on disk, refuses any other conflict and then writes nothing."; //$NON-NLS-1$
     }
 
     @Override

@@ -5,10 +5,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IWorkspace;
@@ -90,6 +94,10 @@ public class GitService {
             case COMMIT -> mutateSimpleRepoCommand(opId, operation,
                     requireRepositoryContext(repoPath, asOptionalString(parameters.get("project_name"))), //$NON-NLS-1$
                     GitCommandBuilder.create().args("commit", "-m", requireString(parameters.get("message"))).build()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            case RESOLVE_REGISTRATION_CONFLICTS -> mutateResolveRegistrationConflicts(opId,
+                    requireRepositoryContext(repoPath, asOptionalString(parameters.get("project_name"))), //$NON-NLS-1$
+                    parameters.get("paths"), Boolean.TRUE.equals(parameters.get("dry_run")), //$NON-NLS-1$ //$NON-NLS-2$
+                    Boolean.TRUE.equals(parameters.get("stage"))); //$NON-NLS-1$
             default -> throw new GitToolException(GitErrorCode.INVALID_ARGUMENT,
                     "Operation is not supported by git_mutate: " + operation); //$NON-NLS-1$
         };
@@ -300,6 +308,151 @@ public class GitService {
             }
         }
         return mutateSimpleRepoCommand(opId, GitOperation.ADD, context, builder.build());
+    }
+
+    /**
+     * Resolves registration-only conflict hunks of the conflicted {@code Configuration.mdo} file(s) as a
+     * union (see {@link RegistrationConflictResolver}). All-or-nothing: if any targeted file refuses,
+     * nothing is written. Targets: {@code paths} when given (each must be a conflicted
+     * {@code Configuration.mdo}), else every conflicted {@code .../Configuration/Configuration.mdo}.
+     */
+    private JsonObject mutateResolveRegistrationConflicts(String opId, GitContextResolution context,
+            Object pathsValue, boolean dryRun, boolean stage) {
+        CommandOutput unmerged = runRepoCommand(opId, context, INSPECT_TIMEOUT_SECONDS,
+                GitCommandBuilder.create().args("-c", "core.quotepath=off", "diff", "--name-only", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                        "--diff-filter=U").build()); //$NON-NLS-1$
+        Set<String> conflicted = new LinkedHashSet<>();
+        for (String line : splitLines(unmerged.stdout())) {
+            if (!line.isBlank()) {
+                conflicted.add(line.trim().replace('\\', '/'));
+            }
+        }
+        List<String> requested = normalizePaths(pathsValue);
+        List<String> targets = new ArrayList<>();
+        if (requested.isEmpty()) {
+            for (String path : conflicted) {
+                if (path.endsWith("Configuration/Configuration.mdo")) { //$NON-NLS-1$
+                    targets.add(path);
+                }
+            }
+        } else {
+            for (String raw : requested) {
+                String path = raw.trim().replace('\\', '/');
+                if (!path.endsWith("Configuration/Configuration.mdo")) { //$NON-NLS-1$
+                    throw new GitToolException(GitErrorCode.INVALID_ARGUMENT,
+                            "resolve_registration_conflicts only handles Configuration.mdo, got: " + raw); //$NON-NLS-1$
+                }
+                if (!conflicted.contains(path)) {
+                    throw new GitToolException(GitErrorCode.INVALID_ARGUMENT,
+                            "Not an unmerged (conflicted) path in this repository: " + raw); //$NON-NLS-1$
+                }
+                targets.add(path);
+            }
+        }
+        if (targets.isEmpty()) {
+            throw new GitToolException(GitErrorCode.INVALID_ARGUMENT,
+                    "No conflicted Configuration.mdo in this repository (unmerged paths: " + conflicted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        JsonObject json = new JsonObject();
+        json.addProperty("op_id", opId); //$NON-NLS-1$
+        json.addProperty("operation", "resolve_registration_conflicts"); //$NON-NLS-1$ //$NON-NLS-2$
+        json.addProperty("repo_root", String.valueOf(context.repoRoot())); //$NON-NLS-1$
+        json.addProperty("dry_run", dryRun); //$NON-NLS-1$
+        JsonArray files = new JsonArray();
+        Map<Path, String> writes = new LinkedHashMap<>();
+        List<String> refusals = new ArrayList<>();
+        for (String relative : targets) {
+            Path file = context.repoRoot().resolve(relative);
+            String text;
+            try {
+                text = Files.readString(file, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new GitToolException(GitErrorCode.COMMAND_FAILED, "Failed to read " + file + ": " + e.getMessage(), e); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            Path srcRoot = file.getParent() == null ? null : file.getParent().getParent();
+            RegistrationConflictResolver.Result result =
+                    RegistrationConflictResolver.resolve(text, r -> registeredObjectExists(srcRoot, r));
+            JsonObject entry = new JsonObject();
+            entry.addProperty("path", relative); //$NON-NLS-1$
+            entry.addProperty("hunks", result.hunks()); //$NON-NLS-1$
+            if (result.refused()) {
+                entry.addProperty("refused", result.refusal()); //$NON-NLS-1$
+                refusals.add(relative + ": " + result.refusal()); //$NON-NLS-1$
+            } else {
+                entry.add("kept_from_ours", toJsonArray(result.keptFromOurs())); //$NON-NLS-1$
+                entry.add("kept_from_theirs", toJsonArray(result.keptFromTheirs())); //$NON-NLS-1$
+                entry.add("dropped_missing_on_disk", toJsonArray(result.droppedMissing())); //$NON-NLS-1$
+                entry.add("dropped_deleted_by_a_side", toJsonArray(result.droppedDeleted())); //$NON-NLS-1$
+                writes.put(file, result.resolvedText());
+            }
+            files.add(entry);
+        }
+        json.add("files", files); //$NON-NLS-1$
+        if (!refusals.isEmpty()) {
+            throw new GitToolException(GitErrorCode.INVALID_ARGUMENT,
+                    "Nothing written — not every conflict is registration-only: " + String.join("; ", refusals) //$NON-NLS-1$ //$NON-NLS-2$
+                            + ". Details: " + files); //$NON-NLS-1$
+        }
+        boolean staged = false;
+        if (!dryRun) {
+            for (Map.Entry<Path, String> write : writes.entrySet()) {
+                try {
+                    Files.writeString(write.getKey(), write.getValue(), StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    throw new GitToolException(GitErrorCode.COMMAND_FAILED,
+                            "Failed to write " + write.getKey() + ": " + e.getMessage(), e); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            if (stage) {
+                GitCommandBuilder add = GitCommandBuilder.create().arg("add").arg("--"); //$NON-NLS-1$ //$NON-NLS-2$
+                targets.forEach(add::arg);
+                runRepoCommand(opId, context, MUTATE_TIMEOUT_SECONDS, add.build());
+                staged = true;
+            }
+        }
+        json.addProperty("written", !dryRun); //$NON-NLS-1$
+        json.addProperty("staged", staged); //$NON-NLS-1$
+        json.addProperty("next_step", dryRun //$NON-NLS-1$
+                ? "Review the union above, then re-run without dry_run." //$NON-NLS-1$
+                : "Let EDT pick up the file (refresh the project), verify with edt_metadata_details " //$NON-NLS-1$
+                        + "objectFqns=[\"Configuration\"], then stage (stage=true or operation=add) and commit."); //$NON-NLS-1$
+        return json;
+    }
+
+    /**
+     * True when {@code src/<AnyFolder>/<Name>/<Name>.mdo} exists and its root element is
+     * {@code mdclass:<Kind>} — the on-disk proof a registration line is not dangling.
+     */
+    static boolean registeredObjectExists(Path srcRoot, RegistrationConflictResolver.Registration r) {
+        if (srcRoot == null || !Files.isDirectory(srcRoot)) {
+            return false;
+        }
+        try (var folders = Files.list(srcRoot)) {
+            for (Path folder : (Iterable<Path>) folders::iterator) {
+                Path mdo = folder.resolve(r.name()).resolve(r.name() + ".mdo"); //$NON-NLS-1$
+                if (!Files.isRegularFile(mdo)) {
+                    continue;
+                }
+                String head;
+                try (var reader = Files.newBufferedReader(mdo, StandardCharsets.UTF_8)) {
+                    char[] buf = new char[600];
+                    int n = reader.read(buf);
+                    head = n <= 0 ? "" : new String(buf, 0, n); //$NON-NLS-1$
+                }
+                if (Pattern.compile("<mdclass:" + Pattern.quote(r.kind()) + "[\\s>]").matcher(head).find()) { //$NON-NLS-1$ //$NON-NLS-2$
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        return false;
+    }
+
+    private static JsonArray toJsonArray(List<String> values) {
+        JsonArray array = new JsonArray();
+        values.forEach(array::add);
+        return array;
     }
 
     private JsonObject mutateSimpleRepoCommand(String opId, GitOperation operation, GitContextResolution context, List<String> command) {
