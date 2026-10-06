@@ -26,6 +26,15 @@ public class QaJUnitReport {
     public List<String> files = new ArrayList<>();
 
     /**
+     * {@code classname} of every parsed {@code <testcase>} (YAxUnit writes {@code Модуль.Метод}), so a
+     * caller can tell which requested filter entries actually ran. Capped at {@link #MAX_CASE_NAMES}.
+     */
+    public List<String> caseClassNames = new ArrayList<>();
+
+    /** Upper bound of {@link #caseClassNames} — a guard against a pathological report. */
+    public static final int MAX_CASE_NAMES = 20000;
+
+    /**
      * {@code true} when a preferred report file name was requested but not present, so the counts
      * above come from a directory-wide {@code *.xml} scan instead — i.e. from files that were never
      * proven to be this run's jUnit report. Callers must surface it rather than treat the totals as
@@ -141,10 +150,18 @@ public class QaJUnitReport {
         report.skipped += suiteSummary.skipped;
         report.timeSeconds += suiteSummary.timeSeconds;
 
+        NodeList cases = suite.getElementsByTagName("testcase");
+        for (int i = 0; i < cases.getLength() && report.caseClassNames.size() < MAX_CASE_NAMES; i++) {
+            if (cases.item(i) instanceof Element testcase) {
+                String className = testcase.getAttribute("classname");
+                if (className != null && !className.isBlank()) {
+                    report.caseClassNames.add(className);
+                }
+            }
+        }
         if (report.failureDetails.size() >= maxFailureDetails) {
             return;
         }
-        NodeList cases = suite.getElementsByTagName("testcase");
         for (int i = 0; i < cases.getLength() && report.failureDetails.size() < maxFailureDetails; i++) {
             Node node = cases.item(i);
             if (!(node instanceof Element testcase)) {

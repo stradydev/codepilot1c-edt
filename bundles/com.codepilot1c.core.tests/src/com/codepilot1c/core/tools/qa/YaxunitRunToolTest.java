@@ -362,4 +362,34 @@ public class YaxunitRunToolTest {
         assertFalse(scanned.fallbackScan);
         assertEquals(99, scanned.tests);
     }
+
+    // --- filter match (feedback 2026-09-18 / 2026-07-24) ----------------------------------------
+
+    @Test
+    public void filterUnmatchedNamesEveryEntryThatRanNoCase() throws Exception {
+        // The live YAxUnit shape: testcase classname = Модуль.Метод. failureDetails capped at 0 so the
+        // case names must be collected independently of the failure-detail cap.
+        File dir = Files.createTempDirectory("yaxunit-filter-match").toFile(); //$NON-NLS-1$
+        Files.write(new File(dir, "junit.xml").toPath(), ("<testsuites>" //$NON-NLS-1$
+                + "<testsuite name=\"NormalizeForHash [Сервер]\" classname=\"CM_ErrorsRegistration\" tests=\"2\">" //$NON-NLS-1$
+                + "<testcase name=\"Empty\" classname=\"CM_ErrorsRegistration.Empty\"><failure message=\"x\"/></testcase>" //$NON-NLS-1$
+                + "<testcase name=\"Trim\" classname=\"CM_ErrorsRegistration.Trim\"/>" //$NON-NLS-1$
+                + "</testsuite></testsuites>").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        QaJUnitReport report = QaJUnitReport.parseDirectory(dir, 0, "junit.xml"); //$NON-NLS-1$
+        assertNotNull(report);
+        assertEquals(List.of("CM_ErrorsRegistration.Empty", "CM_ErrorsRegistration.Trim"), //$NON-NLS-1$ //$NON-NLS-2$
+                report.caseClassNames);
+
+        JsonObject filter = GSON.fromJson("{\"tests\":[\"cm_errorsregistration.EMPTY\"," //$NON-NLS-1$
+                + "\"CM_ErrorsRegistration.Trim.Сервер\",\"CM_ErrorsRegistration.Misspelled\"]," //$NON-NLS-1$
+                + "\"modules\":[\"CM_ErrorsRegistration\",\"CM_Missing\"],\"tags\":[\"x\"]}", JsonObject.class); //$NON-NLS-1$
+
+        assertEquals("REGRESSION: a filter entry that ran nothing must be named, the matched ones " //$NON-NLS-1$
+                + "(case-insensitive, context suffix allowed) must not, and unresolvable keys (tags) " //$NON-NLS-1$
+                + "are never reported", //$NON-NLS-1$
+                List.of("CM_ErrorsRegistration.Misspelled", "CM_Missing"), //$NON-NLS-1$ //$NON-NLS-2$
+                YaxunitRunTool.unmatchedFilterEntries(filter, report.caseClassNames));
+        assertEquals("a zero-test run leaves every tests/modules entry unmatched", //$NON-NLS-1$
+                5, YaxunitRunTool.unmatchedFilterEntries(filter, List.of()).size());
+    }
 }

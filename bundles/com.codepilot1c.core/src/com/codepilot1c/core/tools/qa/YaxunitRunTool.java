@@ -37,6 +37,7 @@ import com.codepilot1c.core.tools.ToolResult;
 import com.codepilot1c.core.tools.workspace.InfobaseProcessScanner;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 /**
@@ -665,6 +666,75 @@ public class YaxunitRunTool extends AbstractTool {
                 + "matched nothing: " + FILTER_HINT + ".", false); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Names the {@code tests}/{@code modules} filter entries that ran no test case
+     * ({@code filter_unmatched}). Without it a partly-wrong filter ({@code [A, B]} with B misspelled or
+     * missing from the infobase) answered a plain {@code passed} for A alone, and a zero-test run did
+     * not say which entries selected nothing (feedback 2026-09-18 / 2026-07-24). The channel and
+     * status stay as {@link #classify} decided — a verdict for what ran still exists.
+     */
+    private static void addFilterMatch(JsonObject result, QaJUnitReport report) {
+        if (report == null || report.fallbackScan
+                || (report.tests > 0 && report.caseClassNames.isEmpty())) {
+            return; // no trustworthy per-case names to compare against
+        }
+        JsonObject filter = result.has("filter") && result.get("filter").isJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+                ? result.getAsJsonObject("filter") : new JsonObject(); //$NON-NLS-1$
+        List<String> unmatched = unmatchedFilterEntries(filter, report.caseClassNames);
+        if (unmatched.isEmpty()) {
+            return;
+        }
+        JsonArray arr = new JsonArray();
+        unmatched.forEach(arr::add);
+        result.add("filter_unmatched", arr); //$NON-NLS-1$
+        if (report.tests > 0) {
+            result.addProperty("filter_note", unmatched.size() //$NON-NLS-1$
+                    + " filter entr" + (unmatched.size() == 1 ? "y" : "ies") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " ran no test case and did NOT contribute to this status: " + String.join(", ", unmatched) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". " + FILTER_HINT + "; or the infobase does not carry them yet — " + STALE_HINT + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
+    /**
+     * The {@code tests}/{@code modules} filter entries no executed case matches (case-insensitive, as
+     * 1C names are). A {@code tests} entry {@code Модуль.Метод[.Контекст]} matches the case whose
+     * classname is {@code Модуль.Метод}; a {@code modules} entry matches any case of that module.
+     * Other filter keys (tags, suites, extensions, contexts) are not resolvable from the report and
+     * are never reported. Package-visible for unit tests.
+     */
+    static List<String> unmatchedFilterEntries(JsonObject filter, List<String> caseClassNames) {
+        List<String> names = new ArrayList<>();
+        for (String name : caseClassNames) {
+            names.add(name.toLowerCase(Locale.ROOT));
+        }
+        List<String> unmatched = new ArrayList<>();
+        for (String entry : filterValues(filter, "tests")) { //$NON-NLS-1$
+            String wanted = entry.trim().toLowerCase(Locale.ROOT);
+            if (names.stream().noneMatch(n -> wanted.equals(n) || wanted.startsWith(n + "."))) { //$NON-NLS-1$
+                unmatched.add(entry);
+            }
+        }
+        for (String entry : filterValues(filter, "modules")) { //$NON-NLS-1$
+            String prefix = entry.trim().toLowerCase(Locale.ROOT) + "."; //$NON-NLS-1$
+            if (names.stream().noneMatch(n -> n.startsWith(prefix))) {
+                unmatched.add(entry);
+            }
+        }
+        return unmatched;
+    }
+
+    private static List<String> filterValues(JsonObject filter, String key) {
+        List<String> values = new ArrayList<>();
+        if (filter != null && filter.has(key) && filter.get(key).isJsonArray()) {
+            for (JsonElement element : filter.getAsJsonArray(key)) {
+                if (element != null && element.isJsonPrimitive() && !element.getAsString().isBlank()) {
+                    values.add(element.getAsString());
+                }
+            }
+        }
+        return values;
+    }
+
     /** {@code true} for the equality states that mean the infobase no longer matches the EDT source. */
     private static boolean isStaleState(String equalityState) {
         String state = equalityState == null ? "" : equalityState.trim().toUpperCase(Locale.ROOT); //$NON-NLS-1$
@@ -728,6 +798,7 @@ public class YaxunitRunTool extends AbstractTool {
         if (!verdict.message().isEmpty()) {
             result.addProperty("message", verdict.message()); //$NON-NLS-1$
         }
+        addFilterMatch(result, report);
         LOG.info("[%s] yaxunit_run verdict: status=%s, reason=%s, total=%d, failed=%d, errors=%d, equality=%s", //$NON-NLS-1$
                 opId, verdict.status(), verdict.reason(), Integer.valueOf(report.tests),
                 Integer.valueOf(report.failures), Integer.valueOf(report.errors), String.valueOf(equalityState));
