@@ -55,11 +55,11 @@ public class GetDiagnosticsTool implements ITool {
                     },
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative file path for scope=file."
+                        "description": "File for scope=file: workspace-rooted ('<Project>/src/...') or project-relative ('src/...') together with project_name."
                     },
                     "project_name": {
                         "type": "string",
-                        "description": "EDT project name for scope=project (if omitted, default project or workspace diagnostics are used). OPTIONAL for scope=file — the project is auto-resolved from the file path, so you can call get_diagnostics(scope=file, path=...) without project_name."
+                        "description": "EDT project name. scope=project: the project to scan (omitted: default project or whole workspace). scope=file: the project `path` is resolved in; may be omitted when path starts with the project name or exists in only one project (a bare path found in several projects is rejected with the candidates)."
                     },
                     "severity": {
                         "type": "string",
@@ -224,15 +224,17 @@ public class GetDiagnosticsTool implements ITool {
             case "project" -> collectWorkspaceDiagnostics
                     ? collector.collectFromWorkspace(query)
                     : collector.collectFromProject(projectName, query); //$NON-NLS-1$
-            case "file" -> collector.collectFromFile(path, query); //$NON-NLS-1$
+            case "file" -> collector.collectFromFile(path, projectName, query); //$NON-NLS-1$
             default -> collector.collectFromActiveEditor(query);
         };
 
         // The scan's identity for the baseline snapshot. Captured before the lambda because
-        // projectName is reassigned above when the default project has to be resolved.
+        // projectName is reassigned above when the default project has to be resolved. A file scan
+        // is keyed by the RESOLVED workspace path (result.filePath()), not the raw argument: the
+        // same 'src/...' path names different files in a base project and its extension.
         final String scopeKey = "project".equals(normalizedScope) //$NON-NLS-1$
                 ? (projectName == null || projectName.isBlank() ? "workspace" : projectName) //$NON-NLS-1$
-                : path;
+                : null;
 
         return resultFuture.thenApply(result -> {
             if (DiagnosticBaseline.MODE_OFF.equals(baselineMode)) {
@@ -241,8 +243,11 @@ public class GetDiagnosticsTool implements ITool {
             String key = scopeKey == null || scopeKey.isBlank() ? result.filePath() : scopeKey;
             return applyBaseline(result, baselineMode, key, reportedMaxItems);
         }).exceptionally(e -> {
-            LOG.error("get_diagnostics failed: %s", e.getMessage()); //$NON-NLS-1$
-            return ToolResult.failure("Failed to get diagnostics: " + e.getMessage()); //$NON-NLS-1$
+            Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null
+                    ? e.getCause()
+                    : e;
+            LOG.error("get_diagnostics failed: %s", cause.getMessage()); //$NON-NLS-1$
+            return ToolResult.failure("Failed to get diagnostics: " + cause.getMessage()); //$NON-NLS-1$
         });
     }
 

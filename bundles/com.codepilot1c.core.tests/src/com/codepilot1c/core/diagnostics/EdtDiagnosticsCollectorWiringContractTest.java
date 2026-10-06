@@ -39,10 +39,14 @@ public class EdtDiagnosticsCollectorWiringContractTest {
     }
 
     @Test
-    public void buildRelativePathCandidatesDelegatesToUtility() throws Exception {
+    public void fileResolutionDelegatesToCoreResolverAndMatchTokensToUtility() throws Exception {
         String src = read(COLLECTOR_PATH);
-        assertTrue("buildRelativePathCandidates must call RelativePathCandidates.build", //$NON-NLS-1$
-                src.contains("RelativePathCandidates.build(")); //$NON-NLS-1$
+        // Which file is meant is decided by DiagnosticFileResolution (behaviour: DiagnosticFileResolutionTest);
+        // the marker match tokens still come from the project-stripped RelativePathCandidates form.
+        assertTrue("resolveFileContext must call DiagnosticFileResolution.resolve", //$NON-NLS-1$
+                src.contains("DiagnosticFileResolution.resolve(")); //$NON-NLS-1$
+        assertTrue("match tokens must come from RelativePathCandidates.buildForMatch", //$NON-NLS-1$
+                src.contains("RelativePathCandidates.buildForMatch(")); //$NON-NLS-1$
     }
 
     @Test

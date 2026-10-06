@@ -33,7 +33,6 @@ import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspaceRoot;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.Position;
@@ -69,6 +68,7 @@ import com.codepilot1c.core.diagnostics.BslLiveValidator;
 import com.codepilot1c.core.diagnostics.BslLiveValidator.BslLiveIssue;
 import com.codepilot1c.core.diagnostics.DcsSchemaValidator;
 import com.codepilot1c.core.diagnostics.DcsSchemaValidator.DcsSchemaIssue;
+import com.codepilot1c.core.diagnostics.DiagnosticFileResolution;
 import com.codepilot1c.core.diagnostics.CheckHelpDetails;
 import com.codepilot1c.core.diagnostics.CheckInfoResolver;
 import com.codepilot1c.core.diagnostics.DiagnosticGroupSamples;
@@ -581,10 +581,26 @@ public class EdtDiagnosticsCollector {
      * @return future with diagnostics result
      */
     public CompletableFuture<DiagnosticsResult> collectFromFile(String filePath, DiagnosticsQuery query) {
+        return collectFromFile(filePath, null, query);
+    }
+
+    /**
+     * Collects diagnostics for a specific file, resolving {@code filePath} inside {@code projectName}
+     * when one is given. Resolution rules: {@link DiagnosticFileResolution}.
+     *
+     * @param filePath    workspace-rooted ("Project/src/...") or project-relative ("src/...") path
+     * @param projectName project to resolve the path in; {@code null} = workspace-rooted path, or a
+     *                    bare path that must be unique across projects
+     * @param query       collection parameters
+     * @return future with diagnostics result; completes exceptionally when the path does not resolve
+     *         to exactly one file
+     */
+    public CompletableFuture<DiagnosticsResult> collectFromFile(
+            String filePath, String projectName, DiagnosticsQuery query) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                diagInfo("[get_diagnostics] scope=file path='%s' severity=%s maxItems=%d includeRuntime=%s", //$NON-NLS-1$
-                        filePath, query.minSeverity(), query.maxItems(), query.includeRuntimeMarkers());
+                diagInfo("[get_diagnostics] scope=file path='%s' project='%s' severity=%s maxItems=%d includeRuntime=%s", //$NON-NLS-1$
+                        filePath, projectName, query.minSeverity(), query.maxItems(), query.includeRuntimeMarkers());
                 if (query.waitMs() > 0) {
                     try {
                         Thread.sleep(query.waitMs());
@@ -593,12 +609,9 @@ public class EdtDiagnosticsCollector {
                     }
                 }
 
-                ResolvedFileContext context = resolveFileContext(filePath);
-                if (context.file() == null) {
-                    throw new IllegalArgumentException("File not found in workspace: " + filePath); //$NON-NLS-1$
-                }
+                ResolvedFileContext context = resolveFileContext(filePath, projectName);
 
-                String resultPath = context.resolvedPath() != null ? context.resolvedPath() : normalizePath(filePath);
+                String resultPath = context.resolvedPath();
                 List<EdtDiagnostic> diagnostics = new ArrayList<>();
                 Set<String> seen = new HashSet<>();
 
@@ -643,96 +656,41 @@ public class EdtDiagnosticsCollector {
         });
     }
 
-    private ResolvedFileContext resolveFileContext(String requestedPath) {
-        String normalizedPath = normalizePath(requestedPath);
-        String pathWithoutLeadingSlash = removeLeadingSlash(normalizedPath);
-        List<String> relativeCandidates = buildRelativePathCandidates(pathWithoutLeadingSlash);
-        // The match-only subset drops candidates that still carry a known
-        // workspace project name as their first segment. Tokens / pathHints
-        // come from THIS subset so the project name never enters the
-        // ALL-tokens marker filter — without this the with-project-prefix
-        // input shape silently returned 0/0/0 because the project segment
-        // became a "discriminating" token that never appeared in any
-        // marker haystack.
-        List<String> matchCandidates = RelativePathCandidates.buildForMatch(
-                pathWithoutLeadingSlash, knownWorkspaceProjectNames());
-
+    private ResolvedFileContext resolveFileContext(String requestedPath, String requestedProject) {
+        String pathWithoutLeadingSlash = removeLeadingSlash(normalizePath(requestedPath));
         IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
+        List<String> accessibleProjects = Arrays.stream(root.getProjects())
+                .filter(this::isAccessibleProject)
+                .map(IProject::getName)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
 
-        // 1) Workspace-relative form: /<project>/...
-        IFile directFile = root.getFile(new Path(withLeadingSlash(pathWithoutLeadingSlash)));
-        if (directFile != null && directFile.exists()) {
-            String resolvedPath = directFile.getFullPath().toString();
-            return new ResolvedFileContext(
-                    requestedPath,
-                    resolvedPath,
-                    directFile.getProject(),
-                    directFile,
-                    buildRuntimePathHints(pathWithoutLeadingSlash, matchCandidates),
-                    buildMatchTokens(matchCandidates),
-                    computeTokenThreshold(buildMatchTokens(matchCandidates)));
+        // Which file is meant is decided in core (unit-tested): project_name confines the lookup to
+        // that project, and a bare path present in several projects is rejected instead of answered
+        // for whichever project sorts first.
+        DiagnosticFileResolution.Result resolution = DiagnosticFileResolution.resolve(
+                pathWithoutLeadingSlash, requestedProject, accessibleProjects,
+                (projectName, relativePath) -> root.getProject(projectName).getFile(relativePath).exists());
+        if (!resolution.resolved()) {
+            throw new IllegalArgumentException(resolution.message());
         }
+        IProject project = root.getProject(resolution.projectName());
+        IFile file = project.getFile(resolution.relativePath());
 
-        // 2) Project-relative form: src/... or Configuration/src/...
-        List<IProject> projects = resolveDiagnosticsProjects();
-        if (projects.isEmpty()) {
-            projects = Arrays.stream(root.getProjects())
-                    .filter(this::isAccessibleProject)
-                    .sorted(Comparator.comparing(IProject::getName, String.CASE_INSENSITIVE_ORDER))
-                    .toList();
-        }
-        for (IProject project : projects) {
-            for (String candidate : relativeCandidates) {
-                IFile file = project.getFile(candidate);
-                if (file != null && file.exists()) {
-                    String resolvedPath = file.getFullPath().toString();
-                    return new ResolvedFileContext(
-                            requestedPath,
-                            resolvedPath,
-                            project,
-                            file,
-                            buildRuntimePathHints(candidate, matchCandidates),
-                            buildMatchTokens(matchCandidates),
-                            computeTokenThreshold(buildMatchTokens(matchCandidates)));
-                }
-            }
-        }
-
-        IProject project = resolveProjectForPath(pathWithoutLeadingSlash, projects, root);
-        String synthesizedPath = project != null
-                ? "/" + project.getName() + "/" + preferredRelativePath(matchCandidates) //$NON-NLS-1$ //$NON-NLS-2$
-                : withLeadingSlash(pathWithoutLeadingSlash);
+        // Match tokens / path hints come from the project-stripped form: the project name never
+        // appears in marker haystacks, so leaving it in makes the ALL-tokens filter reject every
+        // runtime marker (silent 0/0/0 — 2026-05-19-diagnostics-space-in-project-name.md).
+        List<String> matchCandidates = RelativePathCandidates.buildForMatch(
+                resolution.relativePath(), knownWorkspaceProjectNames());
         List<String> tokens = buildMatchTokens(matchCandidates);
         return new ResolvedFileContext(
                 requestedPath,
-                synthesizedPath,
+                file.getFullPath().toString(),
                 project,
-                null,
-                buildRuntimePathHints(preferredRelativePath(matchCandidates), matchCandidates),
+                file,
+                buildRuntimePathHints(resolution.relativePath(), matchCandidates),
                 tokens,
                 computeTokenThreshold(tokens));
-    }
-
-    private IProject resolveProjectForPath(String pathWithoutLeadingSlash, List<IProject> projects, IWorkspaceRoot root) {
-        String normalized = normalizePath(pathWithoutLeadingSlash);
-        int firstSlash = normalized.indexOf('/');
-        String firstSegment = firstSlash > 0 ? normalized.substring(0, firstSlash) : normalized;
-        if (!firstSegment.isBlank()) {
-            IProject byName = root.getProject(firstSegment);
-            if (isAccessibleProject(byName)) {
-                return byName;
-            }
-        }
-
-        String defaultProjectName = resolveDefaultProjectName();
-        if (defaultProjectName != null && !defaultProjectName.isBlank()) {
-            IProject defaultProject = root.getProject(defaultProjectName);
-            if (isAccessibleProject(defaultProject)) {
-                return defaultProject;
-            }
-        }
-
-        return projects.size() == 1 ? projects.get(0) : null;
     }
 
     private String normalizePath(String rawPath) {
@@ -753,18 +711,6 @@ public class EdtDiagnosticsCollector {
         return normalized;
     }
 
-    private String withLeadingSlash(String pathWithoutLeadingSlash) {
-        String normalized = removeLeadingSlash(pathWithoutLeadingSlash);
-        return "/" + normalized; //$NON-NLS-1$
-    }
-
-    private List<String> buildRelativePathCandidates(String pathWithoutLeadingSlash) {
-        // Delegates to the pure-Java RelativePathCandidates utility so the
-        // project-name-stripping rule can be unit-tested without an open
-        // workspace. See 2026-05-19-diagnostics-space-in-project-name.md.
-        return RelativePathCandidates.build(pathWithoutLeadingSlash, knownWorkspaceProjectNames());
-    }
-
     private Set<String> knownWorkspaceProjectNames() {
         IWorkspaceRoot root = ResourcesPlugin.getWorkspace().getRoot();
         IProject[] projects = root.getProjects();
@@ -778,19 +724,6 @@ public class EdtDiagnosticsCollector {
             }
         }
         return out;
-    }
-
-    private String preferredRelativePath(List<String> relativeCandidates) {
-        if (relativeCandidates == null || relativeCandidates.isEmpty()) {
-            return ""; //$NON-NLS-1$
-        }
-        for (String candidate : relativeCandidates) {
-            String lower = candidate.toLowerCase(Locale.ROOT);
-            if (!lower.startsWith("configuration/") && !lower.startsWith("конфигурация/")) { //$NON-NLS-1$ //$NON-NLS-2$
-                return candidate;
-            }
-        }
-        return relativeCandidates.get(0);
     }
 
     private List<String> buildRuntimePathHints(String preferredRelativePath, List<String> relativeCandidates) {
