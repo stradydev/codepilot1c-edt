@@ -177,6 +177,25 @@ public class WebPublicationToolStandaloneTest {
     }
 
     @Test
+    public void probeFailureCarriesTheResponseBodyExcerpt() {
+        StubPublicationService service = new StubPublicationService();
+        service.probeStatus = 500;
+        service.probeBody = "1C:Enterprise 8 application error:Error in virtual resources descriptor distribution" //$NON-NLS-1$
+                + " by reason: XML parsing error: - [9,1] Fatal error: Extra content at the end of the document"; //$NON-NLS-1$
+        WebPublicationTool tool = new WebPublicationTool(service, new EdtRuntimeService());
+
+        ToolResult result = tool.execute(Map.of(
+                "action", "probe", //$NON-NLS-1$ //$NON-NLS-2$
+                "probe_url", "http://localhost:8091/agent-current/odata/standard.odata")).join(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        JsonObject json = JsonParser.parseString(result.getErrorMessage()).getAsJsonObject();
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue(message, message.contains("HTTP 500")); //$NON-NLS-1$
+        assertTrue(message, message.contains("Extra content at the end of the document")); //$NON-NLS-1$
+    }
+
+    @Test
     public void probePassesCredentialsToService() {
         StubPublicationService service = new StubPublicationService();
         service.probeStatus = 200;
@@ -371,6 +390,7 @@ public class WebPublicationToolStandaloneTest {
         String lastConnection;
         PublicationExtras lastExtras;
         int probeStatus = 200;
+        String probeBody;
         /** Raw EDT-side failure {@code registerServer} should throw (SWTException stand-in). */
         RuntimeException registerFailure;
         /** What {@code findServer} finds afterwards — non-null means the registration persisted. */
@@ -433,7 +453,7 @@ public class WebPublicationToolStandaloneTest {
         public ProbeOutcome probe(String url, int timeoutMs, String user, String password) {
             lastProbeUser = user;
             lastProbePassword = password;
-            return new ProbeOutcome(probeStatus, 5L);
+            return new ProbeOutcome(probeStatus, 5L, probeBody);
         }
     }
 

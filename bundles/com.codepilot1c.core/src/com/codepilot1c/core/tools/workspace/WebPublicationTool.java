@@ -433,7 +433,9 @@ public class WebPublicationTool extends AbstractTool {
                             + (outcome.statusCode() == 401 && borrowed
                                     ? " — the borrowed infobase login (\"" + user + "\") was rejected;" //$NON-NLS-1$ //$NON-NLS-2$
                                             + " the endpoint likely wants a different account, pass" //$NON-NLS-1$
-                                            + " probe_user/probe_password" : "")); //$NON-NLS-1$
+                                            + " probe_user/probe_password" : "") //$NON-NLS-1$
+                            + (outcome.bodyExcerpt() == null ? "" //$NON-NLS-1$
+                                    : ". Response body: " + outcome.bodyExcerpt())); //$NON-NLS-1$
         }
     }
 

@@ -2,9 +2,11 @@ package com.codepilot1c.core.edt.publication;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +18,8 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
@@ -88,13 +92,23 @@ public class EdtWebPublicationService {
     private static final String IIS_TYPE_ID_PREFIX =
             "com._1c.g5.v8.dt.platform.services.core.webServerType.IIS."; //$NON-NLS-1$
     private static final long PROCESS_STOP_TIMEOUT_MS = 10_000L;
+    /** The descriptor EDT's {@code InfobasePublicationStore} writes into the publication directory. */
+    private static final String VRD_FILE_NAME = "default.vrd"; //$NON-NLS-1$
+    /** Cap on the response-body excerpt a failed probe carries back. */
+    static final int PROBE_BODY_LIMIT = 1000;
+    private static final Pattern CONTENT_TYPE_CHARSET =
+            Pattern.compile("charset\\s*=\\s*\"?([\\w.:-]+)", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
 
     /** Outcome of a {@link #restartServer} call. */
     public record RestartOutcome(String method, List<Long> stoppedPids, long startedPid, String command) {
     }
 
     /** Outcome of a {@link #probe} call. */
-    public record ProbeOutcome(int statusCode, long elapsedMs) {
+    public record ProbeOutcome(int statusCode, long elapsedMs, String bodyExcerpt) {
+
+        public ProbeOutcome(int statusCode, long elapsedMs) {
+            this(statusCode, elapsedMs, null);
+        }
     }
 
     /** Wsap module resolved from a pinned platform installation. */
@@ -380,6 +394,13 @@ public class EdtWebPublicationService {
         publication.setInfobaseConnection(infobaseConnection);
         publication.setEnable(true);
         applyExtras(publication, extras);
+        if (VrdPointRepair.selfClosesPointWithChildren(publication)) {
+            // EDT's vrd writer inverts its standardOdata test and would close <point/> before writing
+            // <standardOdata/> as a second root (HTTP 500 "Extra content at the end of the document").
+            // A default Pool is never serialized (writePool skips a pool equal to the default) but moves
+            // the writer onto its open-element branch. See VrdPointRepair.
+            publication.setPool(ModelFactory.eINSTANCE.createPool());
+        }
         Path webExtensionUsed = null;
 
         try {
@@ -433,6 +454,7 @@ public class EdtWebPublicationService {
         repairWsModuleLine(server, "publish '" + name + "'", //$NON-NLS-1$ //$NON-NLS-2$
                 ApacheWsModuleLines.modulePathKey(webExtensionUsed.toString()),
                 ApacheWsModuleLines.moduleLineFor(webExtensionUsed.toString()));
+        repairVrd(effectiveLocation.resolve(VRD_FILE_NAME));
         refreshManagerSnapshot(server, publication);
         LOG.info("Published '%s' on '%s' (location=%s)", name, serverName, effectiveLocation); //$NON-NLS-1$
         return publication;
@@ -469,6 +491,29 @@ public class EdtWebPublicationService {
                     e.toString());
             addConfRepairNote(operation + ": could not verify the LoadModule _1cws_module line in " + conf //$NON-NLS-1$
                     + " (" + e.getMessage() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** Post-publish safety net for a vrd EDT wrote with {@code <point/>} self-closed; see {@link VrdPointRepair}. */
+    private void repairVrd(Path vrd) {
+        if (vrd == null || !Files.isRegularFile(vrd)) {
+            return;
+        }
+        try {
+            String text = Files.readString(vrd, StandardCharsets.UTF_8);
+            String repaired = VrdPointRepair.nestRootSiblingsIntoPoint(text);
+            if (repaired != null) {
+                Files.writeString(vrd, repaired, StandardCharsets.UTF_8);
+                String note = "nested root-level siblings of a self-closed <point/> back into <point> in " + vrd; //$NON-NLS-1$
+                LOG.info("%s", note); //$NON-NLS-1$
+                addConfRepairNote(note);
+            } else if (!VrdPointRepair.isWellFormed(text)) {
+                String note = "the generated " + vrd + " is not well-formed XML and could not be repaired"; //$NON-NLS-1$ //$NON-NLS-2$
+                LOG.warn("%s", note); //$NON-NLS-1$
+                addConfRepairNote(note);
+            }
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("Could not verify the generated vrd %s: %s", vrd, e.toString()); //$NON-NLS-1$
         }
     }
 
@@ -758,12 +803,57 @@ public class EdtWebPublicationService {
                 connection.setRequestProperty("Authorization", "Basic " + token); //$NON-NLS-1$ //$NON-NLS-2$
             }
             int status = connection.getResponseCode();
+            long elapsed = System.currentTimeMillis() - start;
+            String excerpt = status >= 400 ? readErrorBody(connection) : null;
             connection.disconnect();
-            return new ProbeOutcome(status, System.currentTimeMillis() - start);
+            return new ProbeOutcome(status, elapsed, excerpt);
         } catch (IOException e) {
             throw new EdtToolException(EdtToolErrorCode.PROBE_FAILED,
                     "Probe of " + url + " failed: " + e.getMessage(), e); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * The start of a failed response's body — the platform reports e.g. a broken vrd only there
+     * ("XML parsing error … Extra content at the end of the document"). Best effort, never throws.
+     */
+    private static String readErrorBody(HttpURLConnection connection) {
+        try (InputStream in = connection.getErrorStream()) {
+            if (in == null) {
+                return null;
+            }
+            return bodyExcerpt(in.readNBytes(PROBE_BODY_LIMIT * 4), connection.getContentType(), PROBE_BODY_LIMIT);
+        } catch (IOException | RuntimeException e) {
+            LOG.debug("Could not read the probe error body: %s", e.toString()); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Decodes a response body with the charset its {@code Content-Type} names (UTF-8 otherwise),
+     * trims it and caps it at {@code limit} characters; {@code null} for an empty body. Package
+     * visible for tests.
+     */
+    static String bodyExcerpt(byte[] body, String contentType, int limit) {
+        if (body == null || body.length == 0) {
+            return null;
+        }
+        Charset charset = StandardCharsets.UTF_8;
+        if (contentType != null) {
+            Matcher matcher = CONTENT_TYPE_CHARSET.matcher(contentType);
+            if (matcher.find()) {
+                try {
+                    charset = Charset.forName(matcher.group(1));
+                } catch (IllegalArgumentException e) {
+                    // unknown charset name: keep UTF-8
+                }
+            }
+        }
+        String text = new String(body, charset).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        return text.length() <= limit ? text : text.substring(0, limit) + "... [truncated]"; //$NON-NLS-1$
     }
 
     // -- internals --------------------------------------------------------------------------
