@@ -9,6 +9,35 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-38d (2026-10-06) — Catalog predefined items: `update_metadata changes.predefined_ops`
+
+* **Feedback 2026-10-06 catalog-predefined-item-add-no-tool (dev-stack-1, BF-10233)** (`362fa4c`,
+  `9b65c8d`). There was no way at all to add ONE predefined item to a catalog that already has ~100.
+  Three paths failed:
+  * `add_metadata_child` has no such kind.
+  * `set.predefined` is a containment, and the setter refuses it. It is a refusal, not a replace.
+  * `changes.predefined_ops` got a validation token and then failed in the mutator.
+
+  New: `predefined_ops = [{op:"add", name, description?, code?, is_folder?, parent?} | {op:"set", name,
+  new_name?, description?, code?} | {op:"delete", name}]` applies Catalog predefined items one at a time
+  and never replaces the list. Behaviour:
+  * The code is typed from the catalog's code type (`StringValue` or `NumberValue`).
+  * Duplicate names and codes, over-length codes, invalid identifiers and deletes of a non-empty folder
+    are refused.
+  * Deleting the last item removes the `<predefined>` element.
+  * The request validator now refuses unknown `changes` keys and malformed `predefined_ops` instead of
+    issuing a token for a shape the mutator rejects.
+
+  **Live-validated** on sandbox `TestConfiguration` `Catalog.Catalog`, build `0.1.7.20261006-2111`:
+  * The unknown key `bogus` was refused at validation.
+  * The add of a folder, an item with code `000000103` and a child under the folder wrote exactly the AM
+    markup (`<items id>`, `<content>`, `core:StringValue`).
+  * A set plus a delete changed only those two items.
+  * A duplicate code was refused, and the file hash was unchanged.
+  * Deleting the rest left the file as before, without an empty element. That last point was confirmed on
+    `-2115`, see below.
+  * The file was restored from a backup afterwards.
+
 ### Round-38c (2026-10-06) — `update_infobase` stale-apply hint
 
 * **Feedback 2026-10-06 "update_infobase reports applied but the IB runs the previous text".** This is the
