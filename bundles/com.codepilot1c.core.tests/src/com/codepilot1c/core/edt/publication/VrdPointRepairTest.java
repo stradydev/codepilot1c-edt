@@ -153,6 +153,14 @@ public class VrdPointRepairTest {
         assertNull(EdtWebPublicationService.bodyExcerpt(" \n".getBytes(StandardCharsets.UTF_8), null, 10)); //$NON-NLS-1$
     }
 
+    @Test
+    public void probeBodyExcerptDropsTheBomOfAPlatformJsonError() {
+        // live 2026-10-06: the platform's OData 404 body starts with a UTF-8 BOM
+        byte[] body = "﻿{\"#exception\":\"x\"}".getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
+        assertEquals("{\"#exception\":\"x\"}", //$NON-NLS-1$
+                EdtWebPublicationService.bodyExcerpt(body, "application/json;charset=utf-8", 1000)); //$NON-NLS-1$
+    }
+
     // -- helpers ----------------------------------------------------------------------------
 
     private static Element parse(String xml) throws Exception {

@@ -116,9 +116,29 @@ public class EdtUpdateInfobaseModelSyncTest {
         assertEquals("synced", json.getAsJsonObject("model_sync").get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    @Test
+    public void failureAfterTheBarrierStillCarriesModelSync() throws Exception {
+        // live 2026-10-06: the main configuration was applied, then an attached extension failed
+        // with an NPE — the error payload, built from scratch, used to drop model_sync.
+        RecordingOps ops = new RecordingOps(calls);
+        ToolResult result = tool(new ModelSyncBarrier(ops, 5_000L),
+                new IllegalStateException("extension upload failed")).execute(Map.of( //$NON-NLS-1$
+                        "project_name", "Demo")).join(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        JsonObject json = JsonParser.parseString(result.getErrorMessage()).getAsJsonObject();
+        assertEquals("UPDATE_FAILED", json.get("error_code").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("synced", json.getAsJsonObject("model_sync").get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     private EdtUpdateInfobaseTool tool(ModelSyncBarrier barrier) throws Exception {
+        return tool(barrier, null);
+    }
+
+    private EdtUpdateInfobaseTool tool(ModelSyncBarrier barrier, RuntimeException updateFailure) throws Exception {
         File workspaceRoot = Files.createTempDirectory("edt-update-model-sync").toFile(); //$NON-NLS-1$
         RecordingRuntimeService runtime = new RecordingRuntimeService(calls);
+        runtime.updateFailure = updateFailure;
         return new EdtUpdateInfobaseTool(new NullInfobaseResolver(), runtime,
                 new NoSiblings(runtime), barrier) {
             @Override
@@ -176,6 +196,7 @@ public class EdtUpdateInfobaseModelSyncTest {
 
     private static final class RecordingRuntimeService extends EdtRuntimeService {
         private final List<String> calls;
+        RuntimeException updateFailure;
 
         RecordingRuntimeService(List<String> calls) {
             this.calls = calls;
@@ -209,6 +230,9 @@ public class EdtUpdateInfobaseModelSyncTest {
         public UpdateInfobaseStatus updateInfobaseWithStatus(String projectName, boolean keepConnected,
                 org.eclipse.core.runtime.IProgressMonitor monitor) {
             calls.add("update"); //$NON-NLS-1$
+            if (updateFailure != null) {
+                throw updateFailure;
+            }
             return new UpdateInfobaseStatus(true, false);
         }
     }

@@ -276,6 +276,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
         return CompletableFuture.supplyAsync(() -> {
             LOG.info("[%s] START edt_update_infobase", opId); //$NON-NLS-1$
             String ibPath = null;
+            JsonObject modelSync = new JsonObject();
             // Guard a synchronous (schema) update the same way as the async path: refuse a second
             // concurrent update of this INFOBASE rather than let two Designer sessions collide. Dry runs
             // spawn no Designer session, so they neither acquire the guard nor pay for its key
@@ -312,6 +313,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                     // Before the equality pre-check too: a stale model would answer EQUAL for a file
                     // that was just changed on disk and skip the very update the caller needs.
                     awaitModelInSync(opId, result, projectName);
+                    carryModelSync(result, modelSync);
                 }
                 // Opt-in equality pre-check: short-circuit a redundant update BEFORE any pin/
                 // lease/webserver side effect. getEqualityState is an in-memory EDT query.
@@ -354,26 +356,28 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                 }
                 return ToolResult.success(pretty(result), ToolResult.ToolResultType.CODE);
             } catch (EdtToolException e) {
-                return ToolResult.failure(pretty(errorPayloadFrom(opId, projectName, workspaceRoot, e)));
+                return ToolResult.failure(pretty(withModelSync(
+                        errorPayloadFrom(opId, projectName, workspaceRoot, e), modelSync)));
             } catch (Exception e) {
                 // Damaged-target-DB FIRST: isBlockedByLockedIB matches a bare "xml.zip" substring
                 // anywhere in the chain, which a broken database's config-export failure also carries —
                 // it would mask the real cause as IB_LOCKED and send the caller hunting for a holder.
                 if (isTargetDbDamaged(e)) {
-                    return ToolResult.failure(
-                            pretty(damagedTargetDbPayload(opId, projectName, workspaceRoot, ibPath, e)));
+                    return ToolResult.failure(pretty(withModelSync(
+                            damagedTargetDbPayload(opId, projectName, workspaceRoot, ibPath, e), modelSync)));
                 } else if (isBlockedByLockedIB(e)) {
-                    return ToolResult.failure(pretty(lockedIbPayload(opId, projectName, workspaceRoot, ibPath)));
+                    return ToolResult.failure(pretty(withModelSync(
+                            lockedIbPayload(opId, projectName, workspaceRoot, ibPath), modelSync)));
                 } else if (isBlockedByHttpClients(e)) {
                     JsonObject error = errorPayload(opId, projectName, workspaceRoot,
                             EdtToolErrorCode.UPDATE_BLOCKED_BY_HTTP_CLIENTS, e.getMessage());
                     error.addProperty("hint", HTTP_CLIENTS_HINT); //$NON-NLS-1$
-                    return ToolResult.failure(pretty(error));
+                    return ToolResult.failure(pretty(withModelSync(error, modelSync)));
                 }
                 JsonObject failure = errorPayload(opId, projectName, workspaceRoot,
                         EdtToolErrorCode.UPDATE_FAILED, e.getMessage());
                 attachCauseChain(failure, e, "UPDATE_FAILED (unclassified)"); //$NON-NLS-1$
-                return ToolResult.failure(pretty(failure));
+                return ToolResult.failure(pretty(withModelSync(failure, modelSync)));
             } finally {
                 if (slot != null) {
                     releaseUpdate(updateKey, slot);
@@ -388,6 +392,31 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
      * 2026-10-05-update-infobase-applies-previous-state). Never fails the update: a timeout or a
      * refresh failure is written into the payload as {@code model_sync_warning}.
      */
+    private static final String[] MODEL_SYNC_KEYS = { "model_sync", "model_sync_warning" }; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** Remembers the model-sync fields so a failure payload, built from scratch, can carry them too. */
+    static void carryModelSync(JsonObject result, JsonObject carry) {
+        for (String key : MODEL_SYNC_KEYS) {
+            if (result.has(key)) {
+                carry.add(key, result.get(key));
+            }
+        }
+    }
+
+    /**
+     * Copies the remembered model-sync fields into a failure payload: an update that fails AFTER the
+     * barrier ran (e.g. on an attached extension) may already have applied the main configuration,
+     * and the caller still needs to know whether what was applied was the current disk state.
+     */
+    static JsonObject withModelSync(JsonObject payload, JsonObject carry) {
+        for (String key : MODEL_SYNC_KEYS) {
+            if (carry.has(key) && !payload.has(key)) {
+                payload.add(key, carry.get(key));
+            }
+        }
+        return payload;
+    }
+
     private void awaitModelInSync(String opId, JsonObject result, String projectName) {
         if (modelSyncBarrier == null) {
             return;
@@ -575,6 +604,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
             boolean skipIfCurrent, long timeoutMs) {
         LOG.info("[%s] START edt_update_infobase (async)", opId); //$NON-NLS-1$
         String ibPath = null;
+        JsonObject modelSync = new JsonObject();
         try {
             InfobaseReference infobase = projectResolver.resolveInfobase(projectName, workspaceRoot);
             ibPath = fileIbPath(infobase);
@@ -586,6 +616,7 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
             }
             result.add("details", details); //$NON-NLS-1$
             awaitModelInSync(opId, result, projectName);
+            carryModelSync(result, modelSync);
             // Opt-in equality pre-check — mirrors the synchronous path.
             String equalityState = null;
             if (skipIfCurrent) {
@@ -617,27 +648,28 @@ public class EdtUpdateInfobaseTool extends AbstractTool {
                 JsonObject error = errorPayload(opId, projectName, workspaceRoot,
                         EdtToolErrorCode.UPDATE_FAILED,
                         "EDT update returned false for project: " + projectName); //$NON-NLS-1$
-                return pretty(error);
+                return pretty(withModelSync(error, modelSync));
             }
             return pretty(result);
         } catch (EdtToolException e) {
-            return pretty(errorPayloadFrom(opId, projectName, workspaceRoot, e));
+            return pretty(withModelSync(errorPayloadFrom(opId, projectName, workspaceRoot, e), modelSync));
         } catch (Exception e) {
             // Damaged target DB before the locked-IB check — see the synchronous path for why.
             if (isTargetDbDamaged(e)) {
-                return pretty(damagedTargetDbPayload(opId, projectName, workspaceRoot, ibPath, e));
+                return pretty(withModelSync(
+                        damagedTargetDbPayload(opId, projectName, workspaceRoot, ibPath, e), modelSync));
             } else if (isBlockedByLockedIB(e)) {
-                return pretty(lockedIbPayload(opId, projectName, workspaceRoot, ibPath));
+                return pretty(withModelSync(lockedIbPayload(opId, projectName, workspaceRoot, ibPath), modelSync));
             } else if (isBlockedByHttpClients(e)) {
                 JsonObject error = errorPayload(opId, projectName, workspaceRoot,
                         EdtToolErrorCode.UPDATE_BLOCKED_BY_HTTP_CLIENTS, e.getMessage());
                 error.addProperty("hint", HTTP_CLIENTS_HINT); //$NON-NLS-1$
-                return pretty(error);
+                return pretty(withModelSync(error, modelSync));
             }
             JsonObject failure = errorPayload(opId, projectName, workspaceRoot,
                     EdtToolErrorCode.UPDATE_FAILED, e.getMessage());
             attachCauseChain(failure, e, "UPDATE_FAILED (unclassified, async)"); //$NON-NLS-1$
-            return pretty(failure);
+            return pretty(withModelSync(failure, modelSync));
         }
     }
 

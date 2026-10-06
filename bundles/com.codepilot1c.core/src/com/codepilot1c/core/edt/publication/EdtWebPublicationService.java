@@ -849,7 +849,12 @@ public class EdtWebPublicationService {
                 }
             }
         }
-        String text = new String(body, charset).trim();
+        String text = new String(body, charset);
+        if (text.startsWith("﻿")) { //$NON-NLS-1$
+            // the platform's JSON error bodies start with a BOM
+            text = text.substring(1);
+        }
+        text = text.trim();
         if (text.isEmpty()) {
             return null;
         }
