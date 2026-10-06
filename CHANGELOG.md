@@ -9,6 +9,31 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-38 (2026-10-06) — feedback batch: associations, yaxunit filter, dynamic-list events
+
+* **manage_associations `bind`/`copy` (`4377953`).** EDT's `associate()` refuses an infobase that a
+  DIFFERENT workspace project already holds in the same branch context
+  ("Infobase {0} is already associated with project {1}") and writes nothing — bytecode-verified on
+  services.core 21.0.0, `getAssociation(ref, ctx)` scans every project. The service swallowed that refusal as
+  an idempotent re-bind, so `set_default=false` answered `success:true` for a bind that never landed and
+  `set_default=true` then failed `EDT_SERVICE_UNAVAILABLE`, because the context did not contain the IB.
+  Both symptoms of the 2026-09-24 note came from this. The phantom-Designer lead was a red herring.
+  The refusal now counts as idempotent only when this project's own context holds the infobase. Otherwise
+  the call fails with the new `INFOBASE_BOUND_TO_OTHER_PROJECT`, naming the holder project. `force` is not
+  offered, because EDT's forced path silently dissociates the other project.
+* **yaxunit_run `filter_unmatched` (`b9a287f`).** The report parser keeps every testcase `classname`
+  (`Модуль.Метод`). `yaxunit_run` names the `tests`/`modules` filter entries that ran no case. Matching is
+  case-insensitive, and a context suffix is allowed. When some tests did run, it also adds a `filter_note`.
+  Before this, a partly-wrong filter answered a plain `passed` for the matched part alone. **The channel
+  contract is unchanged:** zero tests stays an error (`no_tests_matched`), and a run with a verdict stays
+  success.
+* **mutate_form_model `set_item handlers` (`57c9402`).** EDT's `getAllowedEvents(FormVisualEntity)`
+  appends the extInfo's events to the item's own list, so the top-level-first lookup always won and the
+  extInfo branch was dead code. As a result, a dynamic-list table's `OnGetDataAtServer` was written into the
+  table's own `<handlers>`, which the platform never calls. This was live-confirmed on the sandbox before the
+  fix. ExtInfo events now resolve first, and an earlier mis-routed handler of the same event is removed from
+  the item.
+
 ### Round-37 (2026-10-06) — feedback batch since 2026-09-16, live-validated on the sandbox
 
 **Live validation** on `workspace-sandbox`, builds `0.1.7.20261006-1724` and `-1745`. The sandbox ran on a
