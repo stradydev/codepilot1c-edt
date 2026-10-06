@@ -10027,11 +10027,22 @@ public class EdtMetadataService {
         Map<String, Object> setChanges = normalizeSetChangesForTarget(target, asMap(changes.get("set"))); //$NON-NLS-1$
         List<?> unsetChanges = changes.get("unset") instanceof List<?> list ? list : List.of(); //$NON-NLS-1$
         List<Map<String, Object>> childOps = asListOfMaps(changes.get("children_ops")); //$NON-NLS-1$
+        List<Map<String, Object>> predefinedOps = asListOfMaps(changes.get("predefined_ops")); //$NON-NLS-1$
 
-        if (setChanges.isEmpty() && unsetChanges.isEmpty() && childOps.isEmpty()) {
+        if (setChanges.isEmpty() && unsetChanges.isEmpty() && childOps.isEmpty() && predefinedOps.isEmpty()) {
             throw new MetadataOperationException(
                     MetadataOperationCode.INVALID_METADATA_CHANGE,
-                    "changes must include set, unset and/or children_ops", false); //$NON-NLS-1$
+                    "changes must include set, unset, children_ops and/or predefined_ops", false); //$NON-NLS-1$
+        }
+        if (!predefinedOps.isEmpty()) {
+            // Additive, item-level predefined edits (feedback 2026-10-06): the predefined list is a
+            // containment that set refuses, so there was no path at all to add ONE item.
+            if (!(target instanceof com._1c.g5.v8.dt.metadata.mdclass.Catalog catalog)) {
+                throw new MetadataOperationException(MetadataOperationCode.INVALID_METADATA_CHANGE,
+                        "predefined_ops is supported for Catalog only, not " + target.eClass().getName(), false); //$NON-NLS-1$
+            }
+            List<String> applied = CatalogPredefinedOps.apply(catalog, predefinedOps);
+            LOG.info("applyObjectChanges: predefined_ops on %s: %s", targetFqn, applied); //$NON-NLS-1$
         }
 
         // Collect synthetic child ops from set keys that look like child attribute names

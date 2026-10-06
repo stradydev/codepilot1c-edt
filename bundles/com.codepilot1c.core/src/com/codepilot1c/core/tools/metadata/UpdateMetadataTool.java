@@ -40,7 +40,7 @@ public class UpdateMetadataTool extends AbstractTool {
                 },
                 "changes": {
                   "type": "object",
-                  "description": "Property changes for an existing object: {set:{...}, unset:[...], children_ops:[...]}. children_ops only supports rename/delete/set on EXISTING children (op: rename|delete|set). To CREATE a new child use add_metadata_child; to mutate form layout use mutate_form_model. For ExchangePlan.content pass set:{content:['Catalog.Foo']} or set:{content:[{mdObject:'Catalog.Foo', autoRecord:'Allow|Deny'}]} — autoRecord defaults to Allow."
+                  "description": "Property changes for an existing object: {set:{...}, unset:[...], children_ops:[...], predefined_ops:[...]}. children_ops only supports rename/delete/set on EXISTING children (op: rename|delete|set). To CREATE a new child use add_metadata_child; to mutate form layout use mutate_form_model. For ExchangePlan.content pass set:{content:['Catalog.Foo']} or set:{content:[{mdObject:'Catalog.Foo', autoRecord:'Allow|Deny'}]} — autoRecord defaults to Allow. Catalog predefined items: predefined_ops:[{op:'add', name, description?, code?, is_folder?, parent?} | {op:'set', name, new_name?, description?, code?} | {op:'delete', name}] — additive, item by item; the existing predefined list is never replaced."
                 },
                 "validation_token": {
                   "type": "string",
