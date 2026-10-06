@@ -415,7 +415,8 @@ public class GitService {
         json.addProperty("next_step", dryRun //$NON-NLS-1$
                 ? "Review the union above, then re-run without dry_run." //$NON-NLS-1$
                 : "Let EDT pick up the file (refresh the project), verify with edt_metadata_details " //$NON-NLS-1$
-                        + "objectFqns=[\"Configuration\"], then stage (stage=true or operation=add) and commit."); //$NON-NLS-1$
+                        + "objectFqns=[\"Configuration\"], then " //$NON-NLS-1$
+                        + (staged ? "commit the merge." : "stage (stage=true or operation=add) and commit.")); //$NON-NLS-1$ //$NON-NLS-2$
         return json;
     }
 

@@ -216,7 +216,9 @@ public final class RegistrationConflictResolver {
             for (String l : side) {
                 if (!l.isBlank() && parse(l) == null) {
                     return "conflict hunk at line " + hunkLine + " is not registration-only (offending line: '" //$NON-NLS-1$ //$NON-NLS-2$
-                            + l.strip() + "') — resolve it by hand or via the EDT merge editor"; //$NON-NLS-1$
+                            + l.strip() + "') — resolve it in the EDT merge editor, or take one side " //$NON-NLS-1$
+                            + "(git checkout --ours/--theirs) and re-register the other side's objects " //$NON-NLS-1$
+                            + "with create_metadata adopt_existing=true"; //$NON-NLS-1$
                 }
             }
         }
