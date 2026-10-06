@@ -84,6 +84,9 @@ public class CatalogPredefinedOpsTest {
         List<CatalogPredefinedItem> items = catalog.getPredefined().getItems();
         assertEquals(1, items.size());
         assertEquals("Changed", items.get(0).getDescription()); //$NON-NLS-1$
+
+        CatalogPredefinedOps.apply(catalog, List.of(Map.of("op", "delete", "name", "AFL_CasinoMapping"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull("deleting the last item must not leave an empty <predefined/>", catalog.getPredefined()); //$NON-NLS-1$
     }
 
     @Test

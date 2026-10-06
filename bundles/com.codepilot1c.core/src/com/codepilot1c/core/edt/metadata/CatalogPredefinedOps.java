@@ -79,6 +79,10 @@ public final class CatalogPredefinedOps {
                 default -> applied.add(delete(predefined, name.trim()));
             }
         }
+        if (predefined.getItems().isEmpty()) {
+            // A catalog without predefined items carries no <predefined> element; do not leave an empty one.
+            catalog.setPredefined(null);
+        }
         return applied;
     }
 
