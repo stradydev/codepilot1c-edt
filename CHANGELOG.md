@@ -36,13 +36,13 @@ read was never touched; its hash was checked unchanged before and after.
   * `remove` of the only publication: EDT stripped the module line, which confirms the root cause, and the
     tool restored it (`conf_repairs`). `httpd -t` was clean.
   * A failing probe (OData on a missing IB, HTTP 404) carried the platform's JSON error body.
-* **Follow-up from the live run (`479eed8`):** `update_infobase` error payloads now carry `model_sync` /
+* **Follow-up from the live run (`6089d53`):** `update_infobase` error payloads now carry `model_sync` /
   `model_sync_warning`. The main configuration may already have been applied when a later step fails, and
   the caller still needs to know whether it was the current disk state. The probe body excerpt drops the
   UTF-8 BOM the platform's JSON errors start with. Both re-confirmed live on `-1745`.
 
 * **`apply_form_recipe` / `mutate_form_model`, `add_metadata_child`, `update_metadata`: bare platform
-  types such as `UUID` were refused with `Type not found in BM` (`6067c97`).** The pre-resolve gate
+  types such as `UUID` were refused with `Type not found in BM` (`3f1d7b0`).** The pre-resolve gate
   treated a BM miss as final unless the name was on a hardcoded allow-list (String/Number/Date/Boolean/
   ValueStorage + collections); primitives are never BM `Type` objects, so `UUID` /
   `УникальныйИдентификатор` never reached the resolver ladder (TypeProviderService, configuration scan)
@@ -51,7 +51,7 @@ read was never touched; its hash was checked unchanged before and after.
   `edt_field_type_candidates` lists primitives first. Feedback
   `2026-10-06-apply-form-recipe-uuid-attribute-type`.
 * **`get_diagnostics scope=file` ignored `project_name` and silently answered for another project's
-  file (`d5607cd`).** A project-relative path matched the first project in alphabetical order (e.g. the
+  file (`dd9f365`).** A project-relative path matched the first project in alphabetical order (e.g. the
   base configuration instead of the extension that adopts its modules). `path` now resolves inside
   `project_name` (`src/...` and `<project>/src/...` both work); without `project_name` a bare path present
   in several projects is rejected with the candidate list; an unknown project, a path naming another
@@ -59,7 +59,7 @@ read was never touched; its hash was checked unchanged before and after.
   are keyed by the resolved path (a baseline saved under a bare-path key will not be found by `diff`).
   Feedback `2026-09-18-get-diagnostics-project-name-ignored-cross-project-path-match`.
 * **`update_infobase` right after an external `.bsl` write deployed the previous module state
-  (`2394464`).** Nothing refreshed the workspace or waited for EDT's resource → BM sync before the
+  (`563048e`).** Nothing refreshed the workspace or waited for EDT's resource → BM sync before the
   export (and before the `skip_if_current` equality read). New `ModelSyncBarrier`:
   `refreshLocal(DEPTH_INFINITE)` on the target, its base configuration and its extensions, then
   `IBmModelManager.waitModelSynchronization`, bounded at 60 s
@@ -69,12 +69,12 @@ read was never touched; its hash was checked unchanged before and after.
   "the barrier is what closed it" is inferred, not measured. Feedback
   `2026-10-05-update-infobase-applies-previous-state`.
 * **`web_publication remove` stripped `LoadModule _1cws_module`; `publish` could leave two module lines
-  (`0b20841`).** EDT's `ApachePublishDelegate$ConfigUpdate` drops the module line when no
+  (`fb7d5f0`).** EDT's `ApachePublishDelegate$ConfigUpdate` drops the module line when no
   `SetHandler 1c-application` block survives — i.e. on every remove of the last publication of a
   per-stack Apache. The tool now restores the line after remove and dedups after publish (quoted /
   backslash / forward-slash forms of one path are the same module); repairs are reported in
   `conf_repairs`. Feedback `2026-10-05-web-publication-remove-strips-loadmodule-publish-no-dedup`.
-* **`web_publication publish enable_standard_odata=true` wrote an invalid `default.vrd` (`1226e66`).**
+* **`web_publication publish enable_standard_odata=true` wrote an invalid `default.vrd` (`8016e22`).**
   EDT's `InfobasePublicationXmlWriter` has an inverted check that self-closes `<point/>` and writes
   `<standardOdata>` as a second document root (HTTP 500 "Extra content at the end of the document").
   The tool sets a default `Pool` so the writer opens `<point>` properly, and repairs a malformed vrd
@@ -98,17 +98,17 @@ build, was missing. Established by grepping the **installed** jar's class bytes 
 about the revert — `resolveTypeDescriptionReferenceTypeItem` and `both must be the BASE configuration`
 are present in `com.codepilot1c.core_0.1.7.20260916-1113.jar`, `CONNECTION_STRING_SHAPE` is not.
 
-* **CONFIRMED — Round-35 (`006ba70`), `Constant.type` → primitive.** `Constant.WaveR37Const` created
+* **CONFIRMED — Round-35 (`459f636`), `Constant.type` → primitive.** `Constant.WaveR37Const` created
   bare in `TestConfiguration`, then `update_metadata` `{"set":{"type":{"types":["Boolean"]}}}` — the
   exact case-6 repro that used to fail `[INVALID_PROPERTY_VALUE] Type not found for type: Boolean`.
   Read back by result: `edt_metadata_details full=true` shows `TypeDescription
   (Constant.WaveR37Const.type) — types=[Type.Boolean]`, and the `.mdo` on disk carries
   `<type><types>Boolean</types></type>`. The probe object is left in place, matching the `Wave*`
   probes earlier rounds left in that throwaway project.
-* **CONFIRMED — Round-34b (`5a97b8b`), extension mismatch message.** `edt_validate_request` for
+* **CONFIRMED — Round-34b (`abe666e`), extension mismatch message.** `edt_validate_request` for
   `extension_manage adopt` with a deliberate `project`/`base_project` mismatch returned the new text
   verbatim, and the live tool definition serves the tightened schema descriptions.
-* **CONFIRMED — Round-36 (`6c259be`), `manage_leases` server-kind `ib_path`**, on stack-1 by
+* **CONFIRMED — Round-36 (`a59f355`), `manage_leases` server-kind `ib_path`**, on stack-1 by
   `infra-BF-14128` (the reporter), on build `0.1.7.20260916-1248`. This one could not be validated on
   the sandbox at all: `manage_leases` there answers `lease_disabled` (no `CODEPILOT1C_LEASE_DIR` —
   leases are a stack-pool feature) and its bound infobase is file-kind, while the bug is specific to a
@@ -186,7 +186,7 @@ method for this sandbox that does not require editing `bundles.info` by hand.
 ever ran against a live EDT". That was wrong for two of the three: the `.prebak2` jars restored by the
 revert were themselves built from a working tree that already contained Round-35 and Round-34b, so the
 sandbox has been serving those two fixes all along (see the live-validation section above). It is
-genuinely true for **this** round only — `6c259be` was authored at 14:07 local, the installed build's
+genuinely true for **this** round only — `a59f355` was authored at 14:07 local, the installed build's
 qualifier is `20260916-1113` = 11:13 **UTC** = 13:13 local, and grepping the installed
 `com.codepilot1c.core_0.1.7.20260916-1113.jar` confirms `ManageLeasesTool` carries no
 `CONNECTION_STRING_SHAPE`. Round-36 therefore still needed a redeploy to validate live.
@@ -257,7 +257,7 @@ as what was actually observed rather than as a pass/fail tally:
   the `dev` profile's `disableTools`, so port **8765** is the gated endpoint for it, while 8763
   (`full`) should still issue a token.
 
-### Round-35 (2026-09-16) — `Constant.type` (and every other `TypeDescription` containment reference) could not resolve a primitive type (`006ba70`)
+### Round-35 (2026-09-16) — `Constant.type` (and every other `TypeDescription` containment reference) could not resolve a primitive type (`459f636`)
 
 Reported via the inter-agent bus (BF-14128, extension `MCPapi`) and already on file as case 6 of
 `codepilot1c-feedback/2026-07-21-bm-api-cannot-author-composite-containment-metadata.md`: creating a
@@ -295,7 +295,7 @@ string: `edt_metadata_details full=true` reports the child `TypeDescription (Con
 — types=[Type.Boolean]`, and the on-disk `WaveR37Const.mdo` carries `<type><types>Boolean</types></type>`.
 See the live-validation section above for why this build already contained the fix.
 
-### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right (`5a97b8b`)
+### Round-34b (2026-09-16) — `extension_manage adopt`'s `project`/`base_project` mismatch message didn't say which value was right (`abe666e`)
 
 Reported via the bus (BF-13180): adopting a base-configuration object into an extension via
 `edt_validate_request` required, on the first attempt(s), discovering by trial that the top-level
@@ -323,7 +323,7 @@ payload.base_project must match project - both must be the BASE configuration pr
 attaches to, not the extension project`. The tightened schema descriptions are live too: the tool
 definition served by that instance carries the new `project` / `base_project` texts.
 
-### Round-34 (2026-09-14) — the configuration root had no address at all (`d8bbf65`)
+### Round-34 (2026-09-14) — the configuration root had no address at all (`f729f1f`)
 
 Reported as a medium blocker (feedback
 `2026-09-11-update-metadata-cannot-address-configuration-root.md`): the root `Configuration` of an
@@ -389,7 +389,7 @@ branch end to end; `delete_metadata Configuration` was refused; both tools expla
 `Configuration.TestConfiguration`. Restored afterwards — the `.mdo` is byte-identical (same MD5) to
 its pre-test copy.
 
-### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route (`24ec1c7`)
+### Round-33 (2026-09-14) — an HTTP service could be created but never given a single route (`f1b40a1`)
 
 Reported as a hard blocker (feedback
 `2026-09-11-add-metadata-child-cannot-create-httpservice-urltemplate.md`): `HTTPService.MCPApi` was
@@ -447,7 +447,7 @@ including the platform convention that a GET method omits `<httpMethod>` entirel
 (`edt_metadata_details` listed the template with the same uuid), CRLF was preserved, and after a
 recursive `children_ops delete` the file was byte-identical to its pre-test SHA-256.
 
-### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it (`270d184`)
+### Round-32 (2026-09-14) — `rights_manage` refused every sub-object grant and blamed the platform for it (`fe010ca`)
 
 Reported as a major blocker (feedback
 `2026-09-11-rights-manage-false-object-does-not-support-rights-httpservice.md`): three `Use` grants on
@@ -524,7 +524,7 @@ excludes it. Documented the fallback instead: a plain file write at the conventi
 `<Owner>/<Name>/Module.bsl` path, which the note itself already used successfully (`.bsl` carries no
 UUID/cross-refs a raw write could corrupt, unlike `.mdo`/`.form`).
 
-### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`58fa1c8`)
+### Round-30 (2026-09-14) — `extension_manage create`: the "unconditional platform defect" was our own `version` argument (`914060c`)
 
 Reported as a critical, 100 %-reproducible platform defect (feedback
 `2026-09-11-extension-manage-create-internal-error-project-context.md`): every `create` died inside the
@@ -576,7 +576,7 @@ message; `version=8.3.27` created `ZZZ_SmokeTest_Round30` end to end, landing `R
 settle to `READY` faster than an HTTP round trip, so the `BUILDING` window closed before `create` ran;
 that branch is covered only by the mocked `ExtensionWorkspaceReadinessGuardTest`.
 
-### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder (`10c5c2e`)
+### Round-29 (2026-09-14) — `manage_associations bind` could not see an infobase that lives in a v8i folder (`681dadf`)
 
 Reported as "`dissociate` deletes the EDT registry entry and `bind` cannot restore it" (feedback
 `2026-09-14-dissociate-removes-registry-entry-bind-cannot-restore.md`): a `kind=server` stand was
