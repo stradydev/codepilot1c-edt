@@ -9,6 +9,19 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-38c (2026-10-06) — `update_infobase` stale-apply hint
+
+* **Feedback 2026-10-06 "update_infobase reports applied but the IB runs the previous text".** This is the
+  defect the Round-37 model-sync barrier (`563048e`) already fixes: external `.bsl` edits had not reached
+  the EDT model before the apply. The stacks still run `0.1.7.20260916-1248`, which has no barrier.
+  The remaining fault was the `NOT_EQUAL` warning. It said "Gate on schema_applied" unconditionally, which
+  sent the reporter to a false green.
+  The warning is now conditional. When the payload carries `model_sync_warning` (the barrier did not
+  settle), it returns `stale_apply_suspected: true` and the text says *do not* gate on `schema_applied`:
+  re-run once and prove the live code with a discriminating test. When the barrier settled, the
+  non-convergence reading stays. This is covered by a unit test only; the barrier itself was
+  live-validated in Round-37.
+
 ### Round-38b (2026-10-06) — `git_mutate resolve_registration_conflicts`
 
 * **New `git_mutate` operation (`c3866b7`), owner decision "option a".** Feedback 2026-07-21 cases 4 and 7:
