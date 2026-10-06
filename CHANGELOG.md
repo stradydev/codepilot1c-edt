@@ -9,6 +9,47 @@ commit hash in parentheses where useful.
 
 ## [Unreleased] — branch `pd/mcp-bridge-lite`
 
+### Round-37 (2026-10-06) — feedback batch since 2026-09-16 (unit-tested, live validation pending)
+
+* **`apply_form_recipe` / `mutate_form_model`, `add_metadata_child`, `update_metadata`: bare platform
+  types such as `UUID` were refused with `Type not found in BM` (`6067c97`).** The pre-resolve gate
+  treated a BM miss as final unless the name was on a hardcoded allow-list (String/Number/Date/Boolean/
+  ValueStorage + collections); primitives are never BM `Type` objects, so `UUID` /
+  `УникальныйИдентификатор` never reached the resolver ladder (TypeProviderService, configuration scan)
+  that would have found it. A BM miss is now final only for qualified metadata-reference types
+  (`CatalogRef.X`); bare names go through the ladder, which still fails loudly if nothing resolves.
+  `edt_field_type_candidates` lists primitives first. Feedback
+  `2026-10-06-apply-form-recipe-uuid-attribute-type`.
+* **`get_diagnostics scope=file` ignored `project_name` and silently answered for another project's
+  file (`d5607cd`).** A project-relative path matched the first project in alphabetical order (e.g. the
+  base configuration instead of the extension that adopts its modules). `path` now resolves inside
+  `project_name` (`src/...` and `<project>/src/...` both work); without `project_name` a bare path present
+  in several projects is rejected with the candidate list; an unknown project, a path naming another
+  project, or a file missing from the named project is an error, never a redirect. File-scope baselines
+  are keyed by the resolved path (a baseline saved under a bare-path key will not be found by `diff`).
+  Feedback `2026-09-18-get-diagnostics-project-name-ignored-cross-project-path-match`.
+* **`update_infobase` right after an external `.bsl` write deployed the previous module state
+  (`2394464`).** Nothing refreshed the workspace or waited for EDT's resource → BM sync before the
+  export (and before the `skip_if_current` equality read). New `ModelSyncBarrier`:
+  `refreshLocal(DEPTH_INFINITE)` on the target, its base configuration and its extensions, then
+  `IBmModelManager.waitModelSynchronization`, bounded at 60 s
+  (`-Dcodepilot1c.edt.update.modelsync.wait.ms`). Never fails the update: the result carries
+  `model_sync{status,…}` and `model_sync_warning` on timeout/partial failure. Root cause is confirmed
+  by code reading only — whether the barrier fully closes the race needs a live run. Feedback
+  `2026-10-05-update-infobase-applies-previous-state`.
+* **`web_publication remove` stripped `LoadModule _1cws_module`; `publish` could leave two module lines
+  (`0b20841`).** EDT's `ApachePublishDelegate$ConfigUpdate` drops the module line when no
+  `SetHandler 1c-application` block survives — i.e. on every remove of the last publication of a
+  per-stack Apache. The tool now restores the line after remove and dedups after publish (quoted /
+  backslash / forward-slash forms of one path are the same module); repairs are reported in
+  `conf_repairs`. Feedback `2026-10-05-web-publication-remove-strips-loadmodule-publish-no-dedup`.
+* **`web_publication publish enable_standard_odata=true` wrote an invalid `default.vrd` (`1226e66`).**
+  EDT's `InfobasePublicationXmlWriter` has an inverted check that self-closes `<point/>` and writes
+  `<standardOdata>` as a second document root (HTTP 500 "Extra content at the end of the document").
+  The tool sets a default `Pool` so the writer opens `<point>` properly, and repairs a malformed vrd
+  after publish as a backstop. A failed probe now carries a truncated response body. Feedback
+  `2026-09-21-yaxunit-extension-full-push-unknown-metadata-object` (publish section).
+
 ### Live validation on builds `0.1.7.20260916-1113` and `-1248` (2026-09-16)
 
 All three fixes of this batch are now live-validated.
